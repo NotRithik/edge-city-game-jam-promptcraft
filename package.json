@@ -1,0 +1,16 @@
+{
+  "name": "promptcraft",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Single-page voxel sandbox where an AI builds structures and invents blocks, creatures and items on the fly.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "tunnel": "cloudflared tunnel --url http://localhost:8787"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
+    "@google/genai": "^2.29.1"
+  }
+}
