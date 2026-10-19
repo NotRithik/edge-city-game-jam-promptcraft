@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
-    "@google/genai": "^2.29.1"
+    "@google/genai": "^2.29.1",
+    "ws": "^8.22.0"
   }
 }

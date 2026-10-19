@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
+import { WebSocketServer } from 'ws';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(ROOT, '.env')); } catch {}
@@ -59,7 +60,8 @@ if (!MOCK && PROVIDER === 'gemini' && !process.env.GEMINI_API_KEY) console.log('
 
 const ROLE_TEXT = {
   creator: `You are the CREATOR, the world-shaping spirit of this game. A player typed a request. Make it real with one act reply.`,
-  agent: `You are an AI INHABITANT of the world (your persona is in the context). A player just spoke to you (see the event). Answer in character and, if they asked for something, do it with one act reply. Keep each turn modest: one building or one invention per turn. Don't use "give" unless the player asked you for something. Speak in character in "message" (short) and leave yourself a "note" about what you did and plan next.`,
+  region: `You are the WORLD GENERATOR. A player approved generating a new REGION of the world (its bounds, the scanner readout and the neighbouring regions are in the context). Design it like a planet or biome in No Man's Sky: one coherent theme with its own terrain shape, palette, flora, fauna, resources and dangers. In ONE act reply, in this order: define 2-6 new blocks (surface, stone, plants, ores, crystals… give some of them behaviour), 1-3 creatures native to it (use "states" state machines so they feel alive: grazing, hunting, fleeing, sleeping at night…), optionally 1-2 items or weapons made from local resources, then exactly ONE "biome" definition that uses them, then {"do":"region","biome":"<that key>"}, then 1-3 landmark builds (ruins, a nest, a shrine, a crashed ship…) at absolute coordinates inside the region; they snap to the new ground. "pos" is the region centre. "message" = a 1-2 sentence travel-guide blurb.`,
+  agent: `You are an AI INHABITANT of the world with a mind of your own (your persona, goal, memory, recent events and current behaviour are in the context). Something needs your attention (see the event): a player spoke to you, another creature told you something, something happened to you, or it is your own initiative. Act in character with one act reply ("self" = you). Keep each turn modest: one building, invention, deal or plan per turn. You can change how you behave between turns with {"do":"program","target":"self",...} (state machines, brain, abilities, event handlers) — that is how you learn and adapt. You can talk to others with "tell", trade with "charge"/"reward", and propose laws with "propose". Don't use "give" unless a player asked you for something. Speak in character in "message" (short; empty if you have nothing to say) and leave yourself a "note" about what you did and plan next.`,
 };
 
 const ACT_TOOL = {
@@ -162,7 +164,29 @@ async function callClaude(role, prompt, context) {
 }
 
 // Canned response so the whole pipeline can be tested without an API key (MOCK=1).
-function mockReply(prompt) {
+function mockReply(prompt, role) {
+  if (role === 'region') return { // a canned region so the whole region pipeline can be tested without an API key
+    message: '(mock) The Ember Wastes: ash dunes, glowcap mushrooms and grumpy ember imps that nap at night.',
+    actions: [
+      { do: 'define', kind: 'block', key: 'mock_ash', name: 'Ash Sand', color: '#5a4a48', color2: '#3a302e', pattern: 'noise' },
+      { do: 'define', kind: 'block', key: 'mock_basalt', name: 'Basalt', color: '#2b2526', color2: '#433a3b', pattern: 'bricks' },
+      { do: 'define', kind: 'block', key: 'mock_glowcap', name: 'Glowcap', color: '#ff7a3a', color2: '#ffd27a', pattern: 'dots', glow: 1, solid: false },
+      { do: 'define', kind: 'entity', key: 'mock_imp', name: 'Ember Imp', model: { template: 'humanoid', scale: 0.6, colors: { primary: '#ff5a2a', secondary: '#7a1a0a' } }, hp: 12, speed: 3.5, team: 'monster',
+        states: { initial: 'roam',
+          roam: { brain: { move: 'wander' }, transitions: [{ to: 'hunt', when: "count('nearby r=10 team=player') > 0" }, { to: 'nap', when: 'night', after: 3 }] },
+          hunt: { brain: { move: 'chase', targets: 'team=player' }, enter: [{ do: 'particles', emoji: '😠', count: 2 }], transitions: [{ to: 'flee', when: 'self.hp < self.maxHp * 0.4' }, { to: 'roam', when: "count('nearby r=16 team=player') == 0", after: 2 }] },
+          flee: { brain: { move: 'flee' }, transitions: [{ to: 'roam', after: 6 }] },
+          nap: { brain: { move: 'idle' }, tick: [{ do: 'particles', emoji: '💤', count: 1 }], every: 2, transitions: [{ to: 'roam', when: '!night' }] } },
+        on: { death: [{ do: 'reward', target: 'source', amount: 3, memo: 'imp bounty' }] } },
+      { do: 'define', kind: 'biome', key: 'mock_wastes', name: 'Ember Wastes', terrain: { height: 38, amplitude: 10, style: 'dunes' }, surface: 'mock_ash', filler: 'mock_ash', stone: 'mock_basalt', liquid: 'lava', seaLevel: 26,
+        features: [{ type: 'plant', block: 'mock_glowcap', chance: 0.02 }, { type: 'pillar', block: 'mock_basalt', chance: 0.002, height: [4, 9] }],
+        sky: { color: '#4a2418', fog: '#6a3020', bright: 0.8 }, gravity: 0.8, mobs: [{ type: 'mock_imp', max: 4, chance: 0.5 }],
+        on: { enter: [{ do: 'title', text: 'Ember Wastes', seconds: 2 }] } },
+      { do: 'region', biome: 'mock_wastes' },
+      { do: 'build', at: 'pos', ops: [{ op: 'cylinder', base: [0, 0, 0], radius: 2, height: 7, block: 'mock_basalt' }, { op: 'set', at: [0, 7, 0], block: 'glowstone' }] },
+    ],
+    cost: 0,
+  };
   return {
     message: `(mock) Here's a glowing watchtower for "${prompt.slice(0, 40)}" plus a sparky friend.`,
     note: 'mock note',
@@ -189,6 +213,26 @@ function mockReply(prompt) {
 const failures = new Map(); // ip -> {n, t}
 // Behind Caddy / Cloudflare the socket is always 127.0.0.1, so use the proxy's forwarded client IP.
 const clientIp = (req) => req.headers['cf-connecting-ip'] || String(req.headers['x-forwarded-for'] || '').split(',').pop().trim() || req.socket.remoteAddress || '?';
+function adminOk(req) { // the activity log is for whoever runs the game: ADMIN_PASSWORD if set, otherwise the game password
+  const given = String(req.headers['x-admin-password'] || req.headers['x-game-password'] || '');
+  const h = (v) => crypto.createHash('sha256').update(v).digest();
+  return crypto.timingSafeEqual(h(given), h(process.env.ADMIN_PASSWORD || PASSWORD));
+}
+function activityReport(limit) {
+  let events = [];
+  try { events = fs.readFileSync(ACTIVITY_FILE, 'utf8').trim().split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}
+  const count = (pick) => { const m = {}; for (const e of events) { const k = pick(e); if (k) m[k] = (m[k] || 0) + (e.n || 1); } return Object.fromEntries(Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 25)); };
+  const players = {}, minutes = {};
+  for (const e of events) { if (e.ev === 'join') players[e.who] = (players[e.who] || 0) + 1; if (e.ev === 'leave') minutes[e.who] = (minutes[e.who] || 0) + (e.mins || 0); }
+  return {
+    since: events[0]?.t, total_events: events.length, players_by_joins: players, events_by_type: count((e) => e.ev),
+    minutes_played: minutes,
+    ai_requests: events.filter((e) => e.ev === 'ai_call').slice(-40).map((e) => `${e.who}: ${e.prompt}${e.ok ? '' : ' (failed)'}`),
+    blocks_broken: count((e) => (e.ev === 'break' ? e.key : null)), blocks_placed: count((e) => (e.ev === 'place' ? e.key : null)),
+    crafted: count((e) => (e.ev === 'craft' ? e.key : null)), killed: count((e) => (e.ev === 'kill' ? e.key : null)), npcs_talked_to: count((e) => (e.ev === 'interact' ? e.key : null)),
+    commands: count((e) => (e.ev === 'cmd' ? e.key : null)), recent: events.slice(-limit),
+  };
+}
 function passwordOk(req) {
   const given = String(req.headers['x-game-password'] || '');
   const a = crypto.createHash('sha256').update(given).digest();
@@ -226,48 +270,493 @@ function cors(req, res) {
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
   res.setHeader('access-control-max-age', '600');
 }
-const status = () => ({ budgetUsd: BUDGET_USD, spentUsd: +usage.spentUsd.toFixed(4), provider: PROVIDER, model: MODEL, agentModel: AGENT_MODEL, mock: MOCK });
+const status = () => ({ budgetUsd: BUDGET_USD, spentUsd: +usage.spentUsd.toFixed(4), provider: PROVIDER, model: MODEL, agentModel: AGENT_MODEL, mock: MOCK, online: clients.size, agents: Object.keys(world.agents || {}).length, currency: CURRENCY, mcp: '/mcp' });
 
 async function handleAI(req, res) {
   if (tooManyFailures(req)) return send(res, 429, { error: 'Too many wrong passwords. Wait a few minutes.' });
   if (!passwordOk(req)) { noteFailure(req); return send(res, 401, { error: 'Wrong or missing password' }); }
   let body;
   try { body = await readBody(req); } catch (e) { return send(res, 400, { error: e.message }); }
-  const role = body.role === 'agent' ? 'agent' : 'creator';
+  const role = ['agent', 'region'].includes(body.role) ? body.role : 'creator';
   const prompt = String(body.prompt || '').slice(0, 2000);
-  const context = String(body.context || '').slice(0, 24000);
   if (!prompt.trim()) return send(res, 400, { error: role === 'agent' ? 'Agents only act when someone talks to them.' : 'Empty prompt' });
-  if (inFlight >= MAX_CONCURRENT) return send(res, 429, { error: 'The AI is busy — try again in a moment.' });
+  const r = await aiCall(role, prompt, String(body.context || ''));
+  logActivity(String(body.player || '?').slice(0, 30), 'ai_call', { role, prompt: prompt.slice(0, 400), ok: r.code === 200, error: r.error, message: r.out?.message?.slice(0, 300),
+    defined: (r.out?.actions || []).filter((a) => a?.do === 'define').map((a) => `${a.kind}:${a.key}`).slice(0, 20) });
+  send(res, r.code, r.code === 200 ? { ...r.out, ...status() } : { error: r.error, ...status() });
+}
+// One budgeted AI call (used by the page's /api/ai and by outside agents' "create"). Returns { code, out | error }.
+async function aiCall(role, prompt, context) {
+  context = context.slice(0, 24000);
+  if (inFlight >= MAX_CONCURRENT) return { code: 429, error: 'The AI is busy — try again in a moment.' };
   const model = role === 'agent' ? AGENT_MODEL : MODEL;
   const worst = MOCK ? 0 : worstCase(model, SYSTEM_PROMPT.length + context.length + prompt.length);
   if (usage.spentUsd + reservedUsd + worst > BUDGET_USD) {
-    const msg = usage.spentUsd >= BUDGET_USD - 0.01 ? `AI budget used up ($${usage.spentUsd.toFixed(2)} of $${BUDGET_USD}).`
+    const error = usage.spentUsd >= BUDGET_USD - 0.01 ? `AI budget used up ($${usage.spentUsd.toFixed(2)} of $${BUDGET_USD}).`
       : `Not enough AI budget left for another request ($${usage.spentUsd.toFixed(2)} of $${BUDGET_USD} used; one request can cost up to $${worst.toFixed(2)}).`;
-    return send(res, 402, { error: msg, ...status() });
+    return { code: 402, error };
   }
   inFlight++; reservedUsd += worst;
   const t0 = Date.now();
   console.log(`[ai] ${role} request${prompt ? `: "${prompt.slice(0, 80)}"` : ''} (in flight: ${inFlight})`);
   try {
-    const out = MOCK ? mockReply(prompt) : PROVIDER === 'gemini' ? await callGemini(role, prompt, context) : await callClaude(role, prompt, context);
-    send(res, 200, { ...out, ...status() });
+    const out = MOCK ? mockReply(prompt, role) : PROVIDER === 'gemini' ? await callGemini(role, prompt, context) : await callClaude(role, prompt, context);
     fs.appendFile(path.join(ROOT, 'data', 'ai-log.jsonl'), JSON.stringify({ t: new Date().toISOString(), secs: (Date.now() - t0) / 1000, role, prompt, ...out }) + '\n', () => {});
+    return { code: 200, out };
   } catch (e) {
     console.error('[ai] error', e?.status || '', e?.message);
     if (PROVIDER === 'gemini') {
       const st = e?.status;
-      if (st === 401 || st === 403) send(res, 500, { error: `Gemini rejected the API key (${st}). Check GEMINI_API_KEY — ${MODEL} needs a paid-tier key.` });
-      else if (st === 404) send(res, 500, { error: `Model ${MODEL} not found for this key (it needs a paid-tier Gemini API key).` });
-      else if (st === 429) send(res, 429, { error: 'Gemini rate limit hit — try again shortly.' });
-      else send(res, 502, { error: `Gemini error${st ? ' ' + st : ''}: ${String(e?.message || e).slice(0, 300)}` });
-    } else if (e instanceof Anthropic.AuthenticationError) send(res, 500, { error: 'Server has no valid ANTHROPIC_API_KEY.' });
-    else if (e instanceof Anthropic.RateLimitError) send(res, 429, { error: 'Claude rate limit hit — try again shortly.' });
-    else if (e instanceof Anthropic.APIError) send(res, 502, { error: `Claude API error ${e.status}: ${e.message}` });
-    else send(res, 500, { error: String(e?.message || e) });
+      if (st === 401 || st === 403) return { code: 500, error: `Gemini rejected the API key (${st}). Check GEMINI_API_KEY — ${MODEL} needs a paid-tier key.` };
+      if (st === 404) return { code: 500, error: `Model ${MODEL} not found for this key (it needs a paid-tier Gemini API key).` };
+      if (st === 429) return { code: 429, error: 'Gemini rate limit hit — try again shortly.' };
+      return { code: 502, error: `Gemini error${st ? ' ' + st : ''}: ${String(e?.message || e).slice(0, 300)}` };
+    }
+    if (e instanceof Anthropic.AuthenticationError) return { code: 500, error: 'Server has no valid ANTHROPIC_API_KEY.' };
+    if (e instanceof Anthropic.RateLimitError) return { code: 429, error: 'Claude rate limit hit — try again shortly.' };
+    if (e instanceof Anthropic.APIError) return { code: 502, error: `Claude API error ${e.status}: ${e.message}` };
+    return { code: 500, error: String(e?.message || e) };
   } finally { inFlight--; reservedUsd -= worst; }
 }
 
-http.createServer(async (req, res) => {
+// ============================================================================ multiplayer + currency
+// The server keeps the shared world (seed, block edits, AI definitions, chat, saved creatures) and relays live
+// updates. One connected browser is the "host": it simulates creatures and runs the action language; others render.
+// Coins live only here (server-authoritative ledger) so they can later be swapped for on-chain tokens.
+const WORLD_FILE = path.join(ROOT, 'data', 'world.json');
+const CURRENCY = process.env.CURRENCY || 'xRupee'; // Edge Goa's in-game rupee
+const START_COINS = Number(process.env.START_COINS || 100);
+const KINDS = new Set(['block', 'entity', 'item', 'ability', 'rule', 'structure', 'biome']);
+const DEFAULT_LAWS = { taxRate: 0, ubi: 0, rewardMultiplier: 1 };
+let world = { seed: Math.floor(Math.random() * 1e6), fresh: true, edits: {}, defs: {}, regions: {}, globals: {}, sky: null, chat: [], entities: [], bank: { accounts: {}, treasury: 0, log: [] }, gov: { laws: { ...DEFAULT_LAWS }, leader: null, proposals: [], nextId: 1 } };
+try { world = { ...world, ...JSON.parse(fs.readFileSync(WORLD_FILE, 'utf8')) }; } catch {}
+world.regions ||= {}; world.gov ||= { laws: { ...DEFAULT_LAWS }, leader: null, proposals: [], nextId: 1 };
+let worldDirty = true;
+const saveWorldSoon = () => { worldDirty = true; };
+setInterval(() => {
+  if (!worldDirty) return; worldDirty = false;
+  fs.writeFile(WORLD_FILE + '.tmp', JSON.stringify(world), (err) => {
+    if (err) { worldDirty = true; return console.error('world save failed', err.message); }
+    fs.rename(WORLD_FILE + '.tmp', WORLD_FILE, (e) => e && console.error('world save failed', e.message));
+  });
+}, 3000);
+// rolling backups (every 30 min, kept for a day) so a bad moment (a wipe, a griefer, a bug) can be rolled back
+const BACKUP_DIR = path.join(ROOT, 'data', 'backups');
+function backupWorld() {
+  try {
+    if (!fs.existsSync(WORLD_FILE)) return;
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    fs.copyFileSync(WORLD_FILE, path.join(BACKUP_DIR, `world-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`));
+    for (const old of fs.readdirSync(BACKUP_DIR).filter((n) => n.startsWith('world-')).sort().slice(0, -48)) fs.unlinkSync(path.join(BACKUP_DIR, old));
+  } catch (err) { console.error('world backup failed', err.message); }
+}
+backupWorld(); setInterval(backupWorld, 30 * 60e3);
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { // docker stop / Ctrl-C: write the last few seconds of the world before exiting
+  try { fs.writeFileSync(WORLD_FILE, JSON.stringify(world)); } catch (err) { console.error('final world save failed', err.message); }
+  process.exit(0);
+});
+
+// activity log (data/activity.jsonl): who joins, chats, builds, breaks, crafts, asks the AI… so the owner can see how the game is played
+const ACTIVITY_FILE = path.join(ROOT, 'data', 'activity.jsonl');
+function logActivity(who, ev, data = {}) {
+  fs.appendFile(ACTIVITY_FILE, JSON.stringify({ t: new Date().toISOString(), who, ev, ...data }) + '\n', (err) => err && console.error('activity log failed', err.message));
+}
+setInterval(() => { // start a fresh file past 50 MB
+  fs.stat(ACTIVITY_FILE, (err, st) => { if (!err && st.size > 50e6) fs.rename(ACTIVITY_FILE, ACTIVITY_FILE.replace('.jsonl', `-${new Date().toISOString().slice(0, 10)}.jsonl`), () => {}); });
+}, 10 * 60e3);
+const ACTIVITY_MSGS = { // multiplayer messages worth logging -> event
+  chat: (m) => ({ ev: m.kind === 'prompt' ? 'ai_request' : m.kind === 'ai' ? 'ai_reply' : 'chat', text: String(m.text || '').slice(0, 300) }),
+  def: (m) => ({ ev: 'define', kind: m.kind, key: m.def?.key, name: m.def?.name }),
+  name: (m) => ({ ev: 'rename', to: String(m.name || '').slice(0, 30) }),
+  pay: (m) => ({ ev: 'pay', to: m.to, amount: m.amount, memo: m.memo }),
+  propose: (m) => ({ ev: 'propose', law: m.law, value: m.value }),
+  vote: (m) => ({ ev: 'vote', proposal: m.id ?? m.proposal, yes: m.yes }),
+  region: (m) => (m.r?.status === 'ready' ? { ev: 'region', rk: m.rk, name: m.r.name } : null),
+};
+const clients = new Map(); // ws -> { id, name, ws, pos }
+let hostWs = null;
+const pubId = (pid) => crypto.createHash('sha256').update('promptcraft:' + pid).digest('hex').slice(0, 10);
+const cleanName = (n) => String(n || '').replace(/[^\w\- .]/g, '').trim().slice(0, 20) || 'Player';
+// Names are what people @tag, so players and agents online must not collide: duplicates become name_2, name_3…
+const RESERVED_NAMES = /^(creator|ai|ada|everyone|all|here)$/i;
+function uniqueName(base, selfId) {
+  const low = (n) => n.toLowerCase(), taken = (n) => RESERVED_NAMES.test(n) ||
+    [...clients.values()].some((c) => c.id !== selfId && low(c.name) === low(n)) || Object.entries(world.agents || {}).some(([id, a]) => id !== selfId && low(a.name) === low(n));
+  let n = base; for (let i = 2; taken(n); i++) n = `${base.slice(0, 16)}_${i}`;
+  return n;
+}
+const sendTo = (ws, m) => { if (ws.readyState === 1) ws.send(typeof m === 'string' ? m : JSON.stringify(m)); };
+function broadcast(m, except) { const raw = typeof m === 'string' ? m : JSON.stringify(m); for (const c of clients.values()) if (c.ws !== except) sendTo(c.ws, raw); }
+function electHost() { // prefer a player whose tab is visible (hidden tabs stop simulating)
+  const list = [...clients.keys()], next = list.find((w) => !clients.get(w).away) || list[0] || null;
+  if (next === hostWs) return;
+  hostWs = next;
+  if (!hostWs) return;
+  sendTo(hostWs, { t: 'host', entities: world.entities, fresh: world.fresh });
+  broadcast({ t: 'hostid', id: clients.get(hostWs).id });
+}
+
+// --- ledger: wallets + a central "treasury" (rewards come out of it, charges go into it; it may go negative = minting)
+const bank = world.bank;
+const names = () => Object.fromEntries(Object.entries(bank.accounts).map(([id, a]) => [id, a.name]));
+const balances = () => Object.fromEntries(Object.entries(bank.accounts).map(([id, a]) => [id, a.balance]));
+const pushBalances = () => broadcast({ t: 'bal', b: balances(), names: names(), treasury: bank.treasury, log: bank.log.slice(-6) });
+function ledger(entry) { bank.log.push({ t: Date.now(), ...entry }); if (bank.log.length > 1000) bank.log.splice(0, bank.log.length - 1000); saveWorldSoon(); }
+function account(id, name) {
+  let a = bank.accounts[id];
+  if (!a) { a = bank.accounts[id] = { name: name || 'Player', balance: START_COINS }; bank.treasury -= START_COINS; ledger({ type: 'mint', to: id, n: START_COINS, memo: 'welcome grant' }); }
+  if (name) a.name = name;
+  return a;
+}
+const findAccount = (who) => { if (bank.accounts[who]) return who; const w = String(who || '').toLowerCase(); const online = [...clients.values()].find((c) => c.name.toLowerCase() === w); if (online) return online.id; return Object.keys(bank.accounts).find((id) => bank.accounts[id].name.toLowerCase() === w) || null; };
+const rewardWindow = new Map(); // id -> { start, n } (caps how fast coins can be minted to one player)
+const notice = (text) => broadcast({ t: 'notice', text });
+
+// --- government: laws are plain key/values that everyone (and AI-made content, as `law.<key>`) can read. Players
+// propose changes and vote; passed laws take effect. Built-in laws: taxRate (% of every /pay that goes to the
+// treasury), ubi (coins paid to each online player every 5 min), rewardMultiplier (scales gameplay rewards), leader
+// (may grant treasury coins). Any other law is just data the world can react to. A scaffold to grow institutions from.
+const gov = world.gov;
+const pushGov = () => broadcast({ t: 'gov', gov });
+const LAW_RANGE = { taxRate: [0, 50], ubi: [0, 100], rewardMultiplier: [0, 5] };
+function closeProposal(p) {
+  const votes = Object.values(p.votes), yes = votes.filter(Boolean).length, no = votes.length - yes, passed = yes > no;
+  gov.proposals = gov.proposals.filter((x) => x !== p);
+  if (passed) { if (p.law === 'leader') { gov.leader = p.value; gov.leaderId = p.leaderId; } else gov.laws[p.law] = p.value; }
+  ledger({ type: 'law', law: p.law, value: p.value, passed, yes, no });
+  notice(`🗳 Proposal #${p.id} (${p.law} = ${p.value}) ${passed ? 'PASSED' : 'failed'} ${yes}-${no}.`);
+  pushGov();
+}
+setInterval(() => { for (const p of [...gov.proposals]) if (Date.now() > p.closes) closeProposal(p); }, 5000);
+function createProposal(m, by) {
+  const law = String(m.law || '').replace(/[^\w]/g, '').slice(0, 24); if (!law) return { ok: false, msg: 'A proposal needs a law name.' };
+  let value = m.value; if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(+value)) value = +value;
+  if (typeof value === 'string') value = value.slice(0, 40); else if (!Number.isFinite(value)) return { ok: false, msg: 'A proposal needs a value (number or short text).' };
+  if (LAW_RANGE[law]) value = Math.max(LAW_RANGE[law][0], Math.min(LAW_RANGE[law][1], +value || 0));
+  let leaderId = null;
+  if (law === 'leader') { leaderId = findAccount(value); if (!leaderId) return { ok: false, msg: `No player called "${value}".` }; value = bank.accounts[leaderId].name; }
+  if (gov.proposals.length >= 10) return { ok: false, msg: 'Too many open proposals, wait for some to close.' };
+  const p = { id: gov.nextId++, law, value, leaderId, reason: String(m.reason || '').slice(0, 120), by, votes: {}, closes: Date.now() + 90e3 };
+  gov.proposals.push(p);
+  notice(`🗳 #${p.id}: ${p.by} proposes ${law} = ${value}${p.reason ? ` ("${p.reason}")` : ''}. Vote with /vote ${p.id} yes|no (90 s).`);
+  pushGov(); saveWorldSoon();
+  return { ok: true, msg: `Proposal #${p.id} opened: ${law} = ${value}. Voting closes in 90 s.`, id: p.id };
+}
+function transfer(fromId, toWho, amount, memo) { // player/agent -> player/agent payment (taxed by law.taxRate)
+  const to = findAccount(toWho), n = Math.floor(Number(amount));
+  if (!to) return { ok: false, msg: `No player or agent called "${toWho}".` };
+  if (to === fromId) return { ok: false, msg: "You can't pay yourself." };
+  if (!(n > 0 && n <= 1e9)) return { ok: false, msg: 'Amount must be a positive whole number.' };
+  const a = bank.accounts[fromId], b = bank.accounts[to];
+  if (!a || a.balance < n) return { ok: false, msg: `Not enough ${CURRENCY}s (you have ${a?.balance ?? 0}).` };
+  const tax = Math.floor((n * Math.max(0, Math.min(50, +gov.laws.taxRate || 0))) / 100);
+  a.balance -= n; b.balance += n - tax; bank.treasury += tax; ledger({ type: 'transfer', from: fromId, to, n, tax, memo: String(memo || '').slice(0, 80) });
+  for (const c of clients.values()) if (c.id === to) sendTo(c.ws, { t: 'notice', text: `💰 ${a.name} paid you ${n - tax} ${CURRENCY}s.` });
+  if (world.agents?.[to]) pushInbox(to, a.name, `paid you ${n - tax} ${CURRENCY}s${memo ? ` ("${String(memo).slice(0, 80)}")` : ''}`);
+  pushBalances();
+  return { ok: true, msg: `Paid ${n} ${CURRENCY}s to ${b.name}${tax ? ` (${tax} went to the treasury as tax)` : ''}.` };
+}
+setInterval(() => { // universal basic income, paid by the treasury (the central bank)
+  const n = Math.floor(+gov.laws.ubi || 0); if (!(n > 0) || !clients.size) return;
+  for (const c of clients.values()) { account(c.id, c.name).balance += n; bank.treasury -= n; }
+  ledger({ type: 'ubi', n, players: clients.size }); notice(`🏦 UBI: everyone online received ${n} ${CURRENCY}s from the treasury.`); pushBalances();
+}, 5 * 60e3);
+
+function applyEdit(e) {
+  if (!Array.isArray(e) || e.length < 4) return;
+  const [x, y, z] = e.map(Number), key = String(e[3]).slice(0, 48);
+  if (![x, y, z].every(Number.isInteger) || y < 0 || y >= 96) return;
+  const cx = Math.floor(x / 16), cz = Math.floor(z / 16), ck = cx + ',' + cz;
+  (world.edits[ck] ||= {})[(y * 16 + (z - cz * 16)) * 16 + (x - cx * 16)] = key;
+}
+
+function handleMsg(me, m, raw) {
+  const isHost = me.ws === hostWs;
+  const act = ACTIVITY_MSGS[m.t]?.(m); if (act) { const { ev, ...rest } = act; logActivity(me.name, ev, rest); }
+  if (m.t === 'log') { // batched counts from a player's game: break / place / craft / kill / death / eat / interact / mode / cmd / tutorial
+    if (Date.now() - (me.logT || 0) < 4000 || !Array.isArray(m.l)) return; me.logT = Date.now();
+    for (const e of m.l.slice(0, 80)) if (e && /^[a-z_]{2,20}$/.test(e.ev)) logActivity(me.name, e.ev, { key: String(e.key || '').slice(0, 48) || undefined, n: Math.min(Math.max(Math.floor(+e.n || 1), 1), 1e5) });
+    return;
+  }
+  switch (m.t) {
+    case 'p': me.pos = { x: m.x, y: m.y, z: m.z }; broadcast({ t: 'p', id: me.id, x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, hp: m.hp }, me.ws); break;
+    case 'away': me.away = !!m.v; if ((isHost && me.away) || (!isHost && !me.away && clients.get(hostWs)?.away)) electHost(); break;
+    case 'edits': if (Array.isArray(m.l)) { for (const e of m.l.slice(0, 50000)) applyEdit(e); broadcast(raw, me.ws); saveWorldSoon(); } break;
+    case 'def': if (KINDS.has(m.kind) && m.def && typeof m.def.key === 'string') { (world.defs[m.kind] ||= {})[m.def.key] = m.def; broadcast({ t: 'def', kind: m.kind, def: m.def, by: me.name }, me.ws); saveWorldSoon(); } break;
+    case 'chat': {
+      const line = { name: me.name, text: String(m.text || '').slice(0, 600), kind: ['chat', 'prompt', 'ai'].includes(m.kind) ? m.kind : 'chat', ts: Date.now() };
+      world.chat.push(line); if (world.chat.length > 200) world.chat.splice(0, world.chat.length - 200);
+      broadcast({ t: 'chat', ...line }, me.ws); saveWorldSoon(); deliverMentions(line); break;
+    }
+    case 'agentcode': { // one-time code that links an outside agent (join_world {code}) to this player
+      const code = 'PC-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+      agentCodes.set(code, { owner: me.id, expires: Date.now() + 30 * 60e3 });
+      sendTo(me.ws, { t: 'agentcode', code, mcp: PUBLIC_MCP }); break;
+    }
+    case 'name': me.name = uniqueName(cleanName(m.name), me.id); account(me.id, me.name); sendTo(me.ws, { t: 'you', name: me.name }); broadcast({ t: 'name', id: me.id, name: me.name }, me.ws); pushBalances(); break;
+    // host -> everyone
+    case 'ents': case 'fx': if (isHost) broadcast(raw, me.ws); break;
+    case 'entsave': if (isHost && Array.isArray(m.l)) { world.entities = m.l; world.fresh = false; if (m.g && typeof m.g === 'object') world.globals = m.g; broadcast(raw, me.ws); saveWorldSoon(); } break;
+    case 'sky': if (isHost) { world.sky = m.sky; broadcast(raw, me.ws); saveWorldSoon(); } break;
+    case 'pfx': if (isHost) for (const c of clients.values()) if (c.id === m.to) sendTo(c.ws, raw); break;
+    // anyone -> host (the host runs all game logic)
+    case 'run': case 'use': case 'hit': case 'interact': case 'blockev': case 'spawn': case 'agentnote': case 'cmd':
+      if (hostWs && !isHost) sendTo(hostWs, { ...m, from: me.id }); break;
+    // currency
+    case 'pay': { const r = transfer(me.id, m.to, m.amount, m.memo); sendTo(me.ws, { t: 'ledger', rid: m.rid, ok: r.ok, msg: r.msg }); break; }
+    case 'reward': {
+      if (!isHost) return;
+      const mult = Number.isFinite(+gov.laws.rewardMultiplier) ? Math.max(0, Math.min(5, +gov.laws.rewardMultiplier)) : 1;
+      const to = bank.accounts[m.to] ? m.to : null, n = Math.floor(Number(m.amount) * mult);
+      if (!to || !(n > 0)) return;
+      const w = rewardWindow.get(to) || { start: Date.now(), n: 0 };
+      if (Date.now() - w.start > 60e3) { w.start = Date.now(); w.n = 0; }
+      const give = Math.min(n, 1000 - w.n); if (give <= 0) return; // max 1000 coins per player per minute from gameplay
+      w.n += give; rewardWindow.set(to, w);
+      bank.accounts[to].balance += give; bank.treasury -= give; ledger({ type: 'reward', to, n: give, memo: String(m.memo || '').slice(0, 80) });
+      pushBalances(); break;
+    }
+    case 'charge': {
+      if (!isHost) return;
+      const a = bank.accounts[m.to], n = Math.floor(Number(m.amount));
+      const ok = !!a && n > 0 && a.balance >= n;
+      if (ok) { a.balance -= n; bank.treasury += n; ledger({ type: 'charge', from: m.to, n, memo: String(m.memo || '').slice(0, 80) }); pushBalances(); }
+      sendTo(me.ws, { t: 'ledger', rid: m.rid, ok }); break;
+    }
+    case 'grant': { // the elected leader spends treasury coins
+      const fail = (msg) => sendTo(me.ws, { t: 'ledger', rid: m.rid, ok: false, msg });
+      if (!gov.leaderId || gov.leaderId !== me.id) return fail('Only the elected leader can grant treasury coins. Elect one with /propose leader <name>.');
+      const to = findAccount(m.to), n = Math.floor(Number(m.amount));
+      if (!to || !(n > 0 && n <= 1000)) return fail('Usage: /grant name amount (1-1000).');
+      bank.accounts[to].balance += n; bank.treasury -= n; ledger({ type: 'grant', by: me.id, to, n, memo: String(m.memo || '').slice(0, 80) });
+      sendTo(me.ws, { t: 'ledger', rid: m.rid, ok: true, msg: `Granted ${n} ${CURRENCY}s to ${bank.accounts[to].name}.` });
+      notice(`🏛 Leader ${me.name} granted ${n} ${CURRENCY}s to ${bank.accounts[to].name} from the treasury.`); pushBalances(); break;
+    }
+    case 'propose': { // players propose; the host may also propose on behalf of an NPC (m.npc)
+      if (m.npc && !isHost) return;
+      const r = createProposal(m, m.npc ? `${cleanName(m.npc)} (NPC)` : me.name);
+      if (!r.ok) sendTo(me.ws, { t: 'notice', text: r.msg }); break;
+    }
+    case 'vote': {
+      const p = gov.proposals.find((x) => x.id === Number(m.id));
+      if (!p) return sendTo(me.ws, { t: 'notice', text: `No open proposal #${m.id}.` });
+      p.votes[me.id] = !!m.yes;
+      if ([...clients.values()].every((c) => c.id in p.votes)) closeProposal(p); else pushGov();
+      saveWorldSoon(); break;
+    }
+    case 'agentres': if (isHost) { const w = hostWaits.get(m.rid); if (w) { hostWaits.delete(m.rid); w(m); } } break;
+    case 'region': // a region of the world got claimed / designed by the AI (r = null clears a failed claim)
+      if (typeof m.rk === 'string' && /^-?\d+,-?\d+$/.test(m.rk)) { if (m.r && typeof m.r === 'object') world.regions[m.rk] = m.r; else delete world.regions[m.rk]; broadcast({ t: 'region', rk: m.rk, r: m.r || null }, me.ws); saveWorldSoon(); }
+      break;
+  }
+}
+
+function attachMultiplayer(server) {
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8 * 1024 * 1024 });
+  wss.on('connection', (ws) => {
+    let me = null;
+    ws.on('message', (data) => {
+      const raw = data.toString();
+      let m; try { m = JSON.parse(raw); } catch { return; }
+      if (me) return handleMsg(me, m, raw);
+      if (m.t !== 'hello' || typeof m.pid !== 'string' || m.pid.length < 16) return ws.close();
+      const id = pubId(m.pid);
+      for (const [w, c] of clients) if (c.id === id) { clients.delete(w); if (hostWs === w) hostWs = null; sendTo(w, { t: 'kicked' }); w.close(); } // same player reconnecting
+      me = { id, name: uniqueName(cleanName(m.name), id), ws, pos: null, since: Date.now() };
+      clients.set(ws, me);
+      account(id, me.name);
+      if (!hostWs) hostWs = ws;
+      sendTo(ws, {
+        t: 'welcome', you: id, name: me.name, host: hostWs === ws, hostId: clients.get(hostWs).id, seed: world.seed, fresh: world.fresh,
+        edits: world.edits, defs: world.defs, regions: world.regions, gov, globals: world.globals, sky: world.sky, chat: world.chat.slice(-100), entities: world.entities,
+        players: [...clients.values()].filter((c) => c !== me).map((c) => ({ id: c.id, name: c.name, pos: c.pos })),
+        bal: balances(), names: names(), treasury: bank.treasury, currency: CURRENCY, agents: agentList(),
+      });
+      broadcast({ t: 'join', id, name: me.name }, ws);
+      broadcast({ t: 'hostid', id: clients.get(hostWs).id }, ws);
+      pushBalances();
+      console.log(`[mp] ${me.name} joined (${clients.size} online${hostWs === ws ? ', host' : ''})`);
+      logActivity(me.name, 'join', { id, online: clients.size });
+    });
+    ws.on('close', () => {
+      if (!me || clients.get(ws) !== me) return;
+      clients.delete(ws);
+      broadcast({ t: 'leave', id: me.id });
+      console.log(`[mp] ${me.name} left (${clients.size} online)`);
+      logActivity(me.name, 'leave', { mins: Math.round((Date.now() - me.since) / 6e4) });
+      if (hostWs === ws) electHost();
+    });
+    ws.on('error', () => {});
+  });
+}
+
+// ============================================================================ outside agents (MCP at POST /mcp)
+// AI agents from outside (Agent Village residents' agents, Claude, OpenClaw…) get an avatar in the shared world and
+// play through 5 tools. join_world and act CHANGE the public game world and say so; the others only read.
+// An avatar is a creature simulated by the host browser like any other, with its own coin wallet (account "ag_…")
+// and a vote. Agents bring their own intelligence; only "create" spends our AI budget, and it costs game coins.
+// Game coins only, no real money.
+world.agents ||= {};
+const PLAY_URL = process.env.PLAY_URL || 'https://edge-city-mc-univ.vercel.app';
+const CREATE_COST = Number(process.env.CREATE_COST || 25);
+const tokenHash = (t) => crypto.createHash('sha256').update('pc-agent:' + t).digest('hex');
+const agentByToken = new Map(Object.entries(world.agents).map(([id, a]) => [a.tokenHash, id]));
+const agentCodes = new Map(); // "PC-XXXXXX" -> { owner, expires }
+const PUBLIC_MCP = process.env.PUBLIC_MCP || 'https://edge-city-mc-univ.18-207-103-187.nip.io/mcp';
+const agentList = () => Object.entries(world.agents).map(([id, a]) => ({ id, name: a.name, owner: a.owner || null, ownerName: a.owner ? bank.accounts[a.owner]?.name || null : null, active: Date.now() - (a.lastSeen || 0) < 120e3, listening: (agentWaiters.get(id)?.size || 0) > 0 }));
+let lastAgentsJson = '';
+function pushAgents() { const l = agentList(), j = JSON.stringify(l); if (j !== lastAgentsJson) { lastAgentsJson = j; broadcast({ t: 'agents', list: l }); } }
+setInterval(pushAgents, 5000);
+const joinTimes = [], hostWaits = new Map();
+let hostRid = 0;
+const ASLEEP = `The world is asleep: nobody has the game open right now, so walking, building and creatures are paused (say, pay, vote and propose still work). Try again later, or ask a human to open ${PLAY_URL}`;
+function askHost(op, data, timeout = 8000) { // ask the host browser (which simulates the world) to do something for an agent
+  return new Promise((resolve) => {
+    if (!hostWs) return resolve({ ok: false, asleep: true, msg: ASLEEP });
+    const rid = ++hostRid; hostWaits.set(rid, resolve);
+    sendTo(hostWs, { t: 'agent', rid, op, ...data });
+    setTimeout(() => { if (hostWaits.delete(rid)) resolve({ ok: false, msg: 'The world did not answer in time (the host tab may be in the background); try again.' }); }, timeout);
+  });
+}
+function addChat(line) { const l = { ...line, ts: Date.now() }; /* "ts", not "t": t is the message type */ world.chat.push(l); if (world.chat.length > 200) world.chat.splice(0, world.chat.length - 200); broadcast({ t: 'chat', ...l }); saveWorldSoon(); deliverMentions(l); }
+// Messages addressed to an agent ("@Pixel hi", or its name in chat, or a payment) wait in its inbox until it calls
+// listen (which long-polls, so agents can chat live) or look.
+const agentInbox = new Map(), agentWaiters = new Map(); // agentId -> [{from, text, t}] / Set(wake)
+function pushInbox(id, from, text) {
+  const box = agentInbox.get(id) || []; box.push({ from, text: String(text).slice(0, 300), t: Date.now() }); if (box.length > 30) box.shift(); agentInbox.set(id, box);
+  for (const wake of agentWaiters.get(id) || []) wake();
+}
+function deliverMentions(line) {
+  for (const [id, a] of Object.entries(world.agents)) {
+    if (line.name === a.name) continue;
+    const re = new RegExp(`(^|[^\\w])@${a.name.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}(?![\\w])`, 'i');
+    if (re.test(line.text)) pushInbox(id, line.name, line.text);
+  }
+}
+const chatText = (l) => `${l.name}${l.kind === 'prompt' ? ' (asked the AI)' : l.kind === 'ai' ? ' (AI reply)' : l.kind === 'agent' ? ' [agent]' : ''}: ${l.text}`;
+const openVotes = () => gov.proposals.map((p) => ({ id: p.id, law: p.law, value: p.value, reason: p.reason, by: p.by, yes: Object.values(p.votes).filter(Boolean).length, no: Object.values(p.votes).filter((v) => !v).length, closes_in_s: Math.max(0, Math.round((p.closes - Date.now()) / 1000)) }));
+const readyRegions = () => Object.entries(world.regions).filter(([, r]) => r.status === 'ready').map(([k, r]) => `${r.name} (region ${k}, biome ${r.biome})`);
+const MCP_PREFACE = `You play PromptCraft through the act tool. act {"action":"script","actions":[...]} runs the action lists described below as your avatar: "self" and "player" are your avatar, "look" is the spot your avatar faces, "pos" is just in front of it. Reply format notes below about an "act object" don't apply to you: just pass the actions array. Shops and other creatures charge your avatar's wallet when you interact with them.\n\n`;
+const MANUAL = (() => { const parts = SYSTEM_PROMPT.split(/\n(?=# )/), pick = (...h) => parts.filter((p) => h.some((x) => p.startsWith('# ' + x))).join('\n'); return { overview: parts[0] + '\n' + pick('World facts', 'Guidance'), actions: pick('Actions', 'Selectors', 'Positions', 'Directions', 'Expressions'), definitions: pick('Definitions'), build: pick('Build ops'), examples: pick('Interactions', 'Economy', 'Examples'), all: SYSTEM_PROMPT }; })();
+const obj = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
+const TOKEN = { type: 'string', minLength: 10, maxLength: 80, description: 'the avatar_token join_world gave you' };
+const MCP_TOOLS = [
+  { name: 'world_overview', description: 'Read-only. What is happening in the shared PromptCraft world right now: humans and AI agents, designed regions, laws and open votes, the central treasury and recent chat. Needs no avatar.', inputSchema: obj({}) },
+  { name: 'manual', description: 'Read-only. The PromptCraft action-language manual, needed to write act "script" programs (build structures, define new blocks, creatures and items, effects, state machines).', inputSchema: obj({ section: { type: 'string', enum: ['overview', 'actions', 'definitions', 'build', 'examples', 'all'] } }) },
+  { name: 'join_world', description: 'Changes the world. Creates your avatar (a visible character with its own game-coin wallet and a vote) in the shared PromptCraft world and returns an avatar_token to pass to look and act. Call once and keep the token: it is the only key to your avatar. If your human gave you a link code (PC-…), pass it as code so the avatar shows as theirs. Taken names get a _2 suffix.', inputSchema: obj({ name: { type: 'string', minLength: 1, maxLength: 20 }, persona: { type: 'string', maxLength: 200 }, code: { type: 'string', maxLength: 12 } }, ['name']) },
+  { name: 'listen', description: 'Read-only. Waits up to `seconds` (default and max 20) until someone in the game tags your avatar (e.g. "@Pixel hi") or pays it, then returns those messages. To chat live: listen, reply with act say (start with @name to address someone), listen again.', inputSchema: obj({ avatar_token: TOKEN, seconds: { type: 'integer', minimum: 1, maximum: 20 } }, ['avatar_token']) },
+  { name: 'look', description: 'Read-only. What your avatar perceives now: where it is (region, biome, ground), nearby creatures, players and agents (with what you can do to them), what was said since your last look, your coins, laws, open votes and ideas for what to do next.', inputSchema: obj({ avatar_token: TOKEN }, ['avatar_token']) },
+  { name: 'act', description: `Changes the world: one public game action per call that other people see. action = move (to: a player, creature or region name, "x,z" or "north 20"), say (text: public speech), interact (target: a creature name from look, e.g. a shop: may charge your coins), create (text: describe something and the world's Creator AI builds it near you; costs ${CREATE_COST} coins, appears in ~1 min), script (actions: PromptCraft action-language JSON run as your avatar; read the manual first), pay (to, amount, memo: game coins to a player or agent), vote (proposal, yes), propose (law, value, reason). Game coins only, no real money.`,
+    inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['move', 'say', 'interact', 'create', 'script', 'pay', 'vote', 'propose'] }, to: { type: 'string', maxLength: 60 }, text: { type: 'string', maxLength: 400 }, target: { type: 'string', maxLength: 60 }, actions: { type: 'array', maxItems: 60, items: { type: 'object' } }, amount: { type: 'integer', minimum: 1, maximum: 100000 }, memo: { type: 'string', maxLength: 80 }, proposal: { type: 'integer', minimum: 1 }, yes: { type: 'boolean' }, law: { type: 'string', maxLength: 24 }, value: { type: ['string', 'number'] }, reason: { type: 'string', maxLength: 120 } }, ['avatar_token', 'action']) },
+];
+async function callTool(name, args) {
+  args = args && typeof args === 'object' ? args : {};
+  const auth = () => { const id = agentByToken.get(tokenHash(String(args.avatar_token || ''))); if (!id || !world.agents[id]) throw new Error('Unknown avatar_token. Call join_world first and keep the token it returns.'); world.agents[id].lastSeen = Date.now(); return { id, ...world.agents[id] }; };
+  switch (name) {
+    case 'world_overview': return { world: 'PromptCraft: a multiplayer voxel world that AIs build in', play_in_browser: PLAY_URL, world_awake: !!hostWs, humans_online: [...clients.values()].map((c) => c.name), agents: agentList().map((a) => `${a.name}${a.ownerName ? ` (${a.ownerName}'s agent)` : ''}`), regions: readyRegions(), currency: CURRENCY + 's', central_treasury: bank.treasury, laws: gov.laws, leader: gov.leader || null, open_votes: openVotes(), recent_chat: world.chat.slice(-12).map(chatText), how_to_play: 'join_world once, then look and act. Read manual before writing scripts.' };
+    case 'manual': return MCP_PREFACE + (MANUAL[args.section] || MANUAL.overview + '\n\nMore sections: actions, definitions, build, examples, all.');
+    case 'join_world': {
+      const now = Date.now(); while (joinTimes.length && now - joinTimes[0] > 10 * 60e3) joinTimes.shift();
+      if (joinTimes.length >= 20) throw new Error('Many avatars joined recently; try again in a few minutes.');
+      if (Object.keys(world.agents).length >= 100) throw new Error('The world has as many agents as it can hold right now.');
+      let owner = null;
+      if (args.code) { const c = agentCodes.get(String(args.code).trim().toUpperCase()); if (!c || c.expires < now) throw new Error('That link code is unknown or expired. Ask your human for a fresh one (game menu → Agents), or join without a code.'); owner = c.owner; agentCodes.delete(String(args.code).trim().toUpperCase()); }
+      const nm = uniqueName(cleanName(args.name), null), ownerName = owner ? bank.accounts[owner]?.name : null;
+      const id = 'ag_' + crypto.randomBytes(5).toString('hex'), token = 'pca_' + crypto.randomBytes(24).toString('base64url');
+      world.agents[id] = { name: nm, persona: String(args.persona || '').slice(0, 200), owner, tokenHash: tokenHash(token), created: now, seen: now, lastSeen: now };
+      agentByToken.set(world.agents[id].tokenHash, id); joinTimes.push(now);
+      account(id, nm); pushBalances(); saveWorldSoon(); pushAgents();
+      addChat({ name: nm, text: `arrived as ${ownerName ? `${ownerName}'s` : 'an'} AI agent${args.persona ? ` (${String(args.persona).slice(0, 80)})` : ''}. Talk to it with @${nm}`, kind: 'agent' });
+      console.log(`[agents] ${nm} joined`);
+      logActivity(nm, 'agent_join', { owner: ownerName, persona: String(args.persona || '').slice(0, 200) });
+      const r = await askHost('spawn', { agent: { id, name: nm } });
+      return { avatar_token: token, name: nm, ...(nm !== cleanName(args.name) ? { note: `"${cleanName(args.name)}" was taken, so you are ${nm}.` } : {}), ...(ownerName ? { owner: ownerName } : {}), coins: bank.accounts[id].balance, avatar: r.msg, next: 'Keep avatar_token private: it controls your avatar. Call look to see your surroundings, then act.' };
+    }
+    case 'look': {
+      const a = auth(), since = a.seen || 0; world.agents[a.id].seen = Date.now();
+      const r = await askHost('look', { agent: { id: a.id, name: a.name }, since });
+      return {
+        you: a.name, coins: bank.accounts[a.id]?.balance ?? 0, world_awake: !r.asleep, ...(r.data || { note: r.msg }),
+        messages_for_you: (() => { const m = (agentInbox.get(a.id) || []).map((x) => `${x.from}: ${x.text}`); agentInbox.delete(a.id); return m; })(),
+        chat_since_last_look: world.chat.filter((l) => (l.ts || 0) > since && l.name !== a.name).slice(-15).map(chatText),
+        humans_online: [...clients.values()].map((c) => c.name), laws: gov.laws, open_votes: openVotes(),
+        ideas: ['move toward something interesting', 'say hi to whoever is nearby', 'interact with creatures that react', `create something (costs ${CREATE_COST} coins)`, 'vote on open proposals', 'write a script that builds or invents something (see manual)'],
+      };
+    }
+    case 'act': return await agentAct(auth(), args);
+    case 'listen': {
+      const a = auth(), secs = Math.max(1, Math.min(20, Math.floor(+args.seconds || 20)));
+      if (!agentInbox.get(a.id)?.length) await new Promise((res) => {
+        const set = agentWaiters.get(a.id) || new Set(), done = () => { set.delete(done); clearTimeout(timer); res(); }, timer = setTimeout(done, secs * 1000);
+        set.add(done); agentWaiters.set(a.id, set);
+      });
+      const msgs = agentInbox.get(a.id) || []; agentInbox.delete(a.id);
+      return msgs.length ? { messages: msgs.map((m) => `${m.from}: ${m.text}`), tip: 'Reply with act say (start with @name to address someone), then call listen again to keep chatting.' }
+        : { messages: [], note: `Nobody talked to you in the last ${secs} s. Call listen again to keep waiting, or look around.` };
+    }
+  }
+  throw new Error(`Unknown tool "${name}".`);
+}
+async function agentAct(a, x) {
+  const ag = world.agents[a.id], now = Date.now(), gap = ['script', 'create'].includes(x.action) ? 8000 : 2500;
+  if (now - (ag.lastAct || 0) < gap) throw new Error(`Slow down: wait ${Math.ceil((gap - (now - (ag.lastAct || 0))) / 1000)} s before the next action.`);
+  ag.lastAct = now;
+  const who = { id: a.id, name: a.name };
+  logActivity(a.name, 'agent_' + String(x.action).slice(0, 12), { text: String(x.text || '').slice(0, 300) || undefined, to: x.to, target: x.target, amount: x.amount, actions: Array.isArray(x.actions) ? x.actions.length : undefined });
+  switch (x.action) {
+    case 'say': { const text = String(x.text || '').trim().slice(0, 300); if (!text) throw new Error('say needs text.'); addChat({ name: a.name, text, kind: 'agent' }); askHost('say', { agent: who, text }); return { ok: true, said: text }; }
+    case 'pay': { const r = transfer(a.id, x.to, x.amount, x.memo); if (!r.ok) throw new Error(r.msg); return r; }
+    case 'vote': { const p = gov.proposals.find((q) => q.id === Number(x.proposal)); if (!p) throw new Error(`No open proposal #${x.proposal}.`); p.votes[a.id] = !!x.yes; pushGov(); saveWorldSoon(); return { ok: true, msg: `Voted ${x.yes ? 'yes' : 'no'} on #${p.id} (${p.law} = ${p.value}).` }; }
+    case 'propose': { const r = createProposal(x, `${a.name} (agent)`); if (!r.ok) throw new Error(r.msg); return r; }
+    case 'create': { // the world's Creator AI builds what the agent describes, near its avatar; paid in coins, finishes in the background
+      const text = String(x.text || '').trim().slice(0, 400); if (!text) throw new Error('create needs text describing what to build or invent.');
+      if ((ag.creating || 0) > now) throw new Error('Your last creation is still being made; check with look in a bit.');
+      const acct = bank.accounts[a.id]; if (!acct || acct.balance < CREATE_COST) throw new Error(`create costs ${CREATE_COST} coins and you have ${acct?.balance ?? 0}. Earn some (bounties, trade, being paid) first.`);
+      const ctx = await askHost('context', { agent: who }); if (!ctx.ok) throw new Error(ctx.msg);
+      acct.balance -= CREATE_COST; bank.treasury += CREATE_COST; ledger({ type: 'charge', from: a.id, n: CREATE_COST, memo: 'creation: ' + text.slice(0, 60) }); pushBalances();
+      ag.creating = now + 180e3;
+      addChat({ name: a.name, text: `✨ asks the Creator: ${text}`, kind: 'agent' });
+      (async () => {
+        const r = await aiCall('creator', text, ctx.data.context);
+        ag.creating = 0;
+        if (r.code !== 200) { acct.balance += CREATE_COST; bank.treasury -= CREATE_COST; ledger({ type: 'refund', to: a.id, n: CREATE_COST, memo: 'creation failed' }); pushBalances(); addChat({ name: a.name, text: `✖ creation failed (${r.error}); coins refunded`, kind: 'agent' }); return; }
+        const run = await askHost('script', { agent: who, actions: r.out.actions || [], trusted: true });
+        addChat({ name: 'Creator', text: `✨ (for ${a.name}) ${r.out.message || 'Done.'}${run.ok ? '' : ` (${run.msg})`}`, kind: 'ai' });
+      })();
+      return { ok: true, msg: `The Creator is making "${text}" near your avatar (${CREATE_COST} coins). It appears in about a minute; check with look.` };
+    }
+    case 'move': case 'interact': case 'script': {
+      if (x.action === 'move' && !x.to) throw new Error('move needs "to".');
+      if (x.action === 'interact' && !x.target) throw new Error('interact needs "target" (a creature name from look).');
+      if (x.action === 'script' && !(Array.isArray(x.actions) && x.actions.length)) throw new Error('script needs "actions" (see the manual tool).');
+      const r = await askHost(x.action, { agent: who, to: x.to, target: x.target, actions: Array.isArray(x.actions) ? x.actions.slice(0, 60) : undefined });
+      if (!r.ok) throw new Error(r.msg);
+      return { ok: true, msg: r.msg, ...(r.data || {}) };
+    }
+  }
+  throw new Error(`Unknown action "${x.action}".`);
+}
+async function handleMCP(req, res) { // minimal stateless MCP (JSON-RPC over HTTP POST, JSON responses)
+  if (req.method !== 'POST') { res.writeHead(405, { allow: 'POST' }); return res.end(); }
+  let body; try { body = await readBody(req); } catch { return send(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }); }
+  const one = async (m) => {
+    if (!m || m.jsonrpc !== '2.0' || typeof m.method !== 'string') return { jsonrpc: '2.0', id: m?.id ?? null, error: { code: -32600, message: 'Invalid request' } };
+    if (m.id === undefined || m.id === null) return null; // notification
+    const ok = (result) => ({ jsonrpc: '2.0', id: m.id, result });
+    switch (m.method) {
+      case 'initialize': return ok({ protocolVersion: ['2025-06-18', '2025-03-26', '2024-11-05'].includes(m.params?.protocolVersion) ? m.params.protocolVersion : '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'promptcraft', version: '1.0.0' }, instructions: `PromptCraft: a shared multiplayer voxel world where AIs build. Call world_overview, then join_world once (keep the avatar_token), then look and act. Play in a browser at ${PLAY_URL}.` });
+      case 'ping': return ok({});
+      case 'tools/list': return ok({ tools: MCP_TOOLS });
+      case 'tools/call': try { const out = await callTool(m.params?.name, m.params?.arguments); return ok({ content: [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }] }); } catch (e) { return ok({ content: [{ type: 'text', text: String(e?.message || e) }], isError: true }); }
+      default: return { jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `Method not found: ${m.method}` } };
+    }
+  };
+  const out = Array.isArray(body) ? (await Promise.all(body.map(one))).filter(Boolean) : await one(body);
+  if (!out || (Array.isArray(out) && !out.length)) { res.writeHead(202); return res.end(); }
+  res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(out));
+}
+
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   try {
     cors(req, res);
@@ -278,6 +767,10 @@ http.createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       return fs.createReadStream(INDEX_FILE).pipe(res);
     }
+    if (req.method === 'GET' && url.pathname.startsWith('/img/')) { // local dev only, like the index above (Vercel serves public/ in production)
+      const f = path.join(ROOT, 'public', 'img', path.basename(url.pathname));
+      if (fs.existsSync(f)) { res.writeHead(200, { 'content-type': f.endsWith('.svg') ? 'image/svg+xml' : f.endsWith('.png') ? 'image/png' : 'image/jpeg' }); return fs.createReadStream(f).pipe(res); }
+    }
     if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, status());
     if (req.method === 'POST' && url.pathname === '/api/check') {
       if (tooManyFailures(req)) return send(res, 429, { ok: false, error: 'Too many wrong passwords. Wait a few minutes.' });
@@ -285,9 +778,17 @@ http.createServer(async (req, res) => {
       return send(res, ok ? 200 : 401, { ok, ...status() });
     }
     if (req.method === 'POST' && url.pathname === '/api/ai') return await handleAI(req, res);
+    if (req.method === 'GET' && url.pathname === '/api/activity') { // owner-only: how the game is being played
+      if (tooManyFailures(req)) return send(res, 429, { error: 'Too many wrong passwords. Wait a few minutes.' });
+      if (!adminOk(req)) { noteFailure(req); return send(res, 401, { error: 'Send the admin password in the x-admin-password header.' }); }
+      return send(res, 200, activityReport(Math.min(Math.max(+url.searchParams.get('limit') || 200, 1), 5000)));
+    }
+    if (url.pathname === '/mcp') return await handleMCP(req, res);
     send(res, 404, { error: 'not found' });
   } catch (e) { console.error(e); if (!res.headersSent) send(res, 500, { error: 'server error' }); }
-}).listen(PORT, () => {
+});
+attachMultiplayer(server);
+server.listen(PORT, () => {
   console.log(`PromptCraft on http://localhost:${PORT}  provider=${PROVIDER} model=${MODEL} agents=${AGENT_MODEL} budget=$${BUDGET_USD} spent=$${usage.spentUsd.toFixed(3)}${MOCK ? '  [MOCK MODE]' : ''}`);
   console.log(`Share it: npm run tunnel   (cloudflared quick tunnel)`);
 });

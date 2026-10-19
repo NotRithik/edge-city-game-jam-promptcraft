@@ -23,6 +23,7 @@ cd ~/$NAME
 chmod 600 .env
 mkdir -p data
 docker build -q -t $NAME . >/dev/null
+docker stop -t 10 $NAME >/dev/null 2>&1 || true # SIGTERM: the server saves the world before exiting
 docker rm -f $NAME >/dev/null 2>&1 || true
 docker run -d --name $NAME --restart unless-stopped \
   -p 127.0.0.1:$HOST_PORT:8787 --env-file .env -v "\$PWD/data:/app/data" $NAME >/dev/null

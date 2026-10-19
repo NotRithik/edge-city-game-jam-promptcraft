@@ -1,13 +1,14 @@
 # PromptCraft
 
-A Minecraft-like voxel sandbox in a single HTML page, where an AI (Google **Gemini 4 Argon** by default, or Claude) builds structures and invents new blocks, creatures, items and world rules while you play. AI agents (like **Ada**, the architect) live in the world and build on their own.
+A multiplayer, Minecraft-like voxel sandbox in a single HTML page, where an AI (Google **Gemini 4 Argon** by default, or Claude) builds structures and invents new blocks, creatures, items and world rules while you play. AI agents (like **Ada**, the architect) live in the world and build on their own. Everyone shares one world and a coin economy (**xRupees**).
 
 ```
 promptcraft/
-  server.js          tiny Node server: serves the game, calls the AI, enforces password + $ budget
+  server.js          tiny Node server: calls the AI (password + $ budget), hosts the shared world + coin ledger (WebSocket /ws)
   prompt.md          the AI's manual (system prompt) for the action language; edit it to teach the AI new tricks
   public/index.html  the whole game: voxel engine, creatures, action-language VM, UI (Three.js from CDN)
   data/usage.json    running $ spend (delete it to reset the budget counter)
+  data/world.json    the shared world: seed, block edits, AI definitions, creatures, chat, coin balances (delete = new world)
 ```
 
 ## Run it
@@ -34,14 +35,98 @@ To share a local copy instead, run `npm run tunnel` in a second terminal. It sta
 
 ## Play
 
+Survival by default: punch trees, craft, mine, eat and get through the night. `/gamemode creative` (or Options → Game Mode) flies, can't die and has every block.
+
 | key | |
 |---|---|
-| **G** | ✨ ask the AI for anything: "a wizard tower here", "a pet dragon that breathes fire", "a block that heals me", "make it night and spawn ghosts" |
-| T / Enter | chat. `@Ada build me a lighthouse` talks to an agent. `/help` lists commands (`/undo`, `/spawn`, `/give`, `/time night`, `/god`, `/new`…) |
-| E | inventory: every block, item and creature, including the ones the AI made |
-| F | fly · WASD/Space/Shift move · left click break/attack · right click place/use/interact · K agents on/off |
+| **G** | ✨ ask **@Creator** (the world AI) for anything: "a wizard tower here", "a pet dragon that breathes fire", "a block that heals me". In survival the things it invents come with crafting recipes |
+| T / Enter | global chat. Tagging an AI makes it answer: `@Ada build me a lighthouse` (an in-world AI mind) or `@Pixel …` (an outside agent). `@player` pings a person |
+| / | commands, with Minecraft-style suggestions (↑↓ pick, Tab completes): `/gamemode`, `/give` (creative), `/time night`, `/pay Bob 10`, `/bal`, `/gov`, `/help`… |
+| **Tab** (hold) | player list: people, their AI agents (bots) and the AI minds you can tag |
+| E | inventory: armour, 2x2 crafting and the recipe book (survival) or the creative tabs |
+| Esc | pause menu (Esc again resumes) |
+| H | **How to Play**: the full guide (also in the menu and `/tutorial`). New players get a short briefing on their first Play, and tutorial hints in the corner until they've moved, punched a tree, crafted, asked @Creator and talked to an AI (`/hints off` hides them) |
+| mouse | hold left = mine / attack · right = place, eat, equip armour, use, open crafting tables and furnaces · middle = pick block |
+| WASD · Space · Shift | move · jump · sprint. F flies (creative), Q throws an item away, K switches AI minds on/off. All keys can be rebound in Controls |
 
-The world saves to the browser's localStorage. Each player has their own world, but everyone shares the AI password and budget.
+Survival basics: logs → planks → sticks and a crafting table → wooden pickaxe → stone tools and a furnace → iron (smelt the ore with coal) → diamonds deep down. Hardness and tool tiers work like Minecraft, food refills hunger and a full belly heals, armour soaks damage, falls hurt, and zombies, skeletons and creepers come out at night (the undead burn at dawn). Your inventory is kept when you die.
+
+AI creations get recipes too: anything @Creator defines can carry a `recipe` (shaped, shapeless or smelting), and things without one get an automatic recipe so they are always obtainable. The AI can also invent its own crafting stations (a "moon altar" with recipes only it can craft).
+
+## Activity log (how the game is being played)
+The server appends every join/leave (with minutes played), chat line, AI request (who asked, what, the reply, what got defined), new definition, region, payment, vote and outside-agent action to `data/activity.jsonl`. Each player's game also sends batched counts every 15 s: blocks broken and placed by type, crafting, kills, deaths, eating, which NPCs people talk to, game-mode switches, commands and guide opens. Players are told on the How to Play page.
+
+Read it with the admin password (`ADMIN_PASSWORD` in `.env`, or the game password if that's unset):
+
+```bash
+curl -s -H "x-admin-password: $ADMIN_PASSWORD" "https://edge-city-mc-univ.18-207-103-187.nip.io/api/activity?limit=200"
+```
+
+It returns a summary (players, minutes played, events by type, recent AI requests, top blocks broken/placed, crafts, kills, NPCs, commands) plus the most recent events. The file starts fresh past 50 MB. The world itself is also backed up every 30 minutes (`data/backups/`, last 24 hours).
+
+## Regions ("planets")
+
+The world is cut into 128×128-block **regions**. The area around spawn is the normal overworld. Elsewhere, an uncharted region shows a free procedural **scanner readout** with a name, climate, wildlife, riches and gravity, then asks **"Generate it with the AI? [Y]/[N]"**. Nothing is sent to the AI until you press Y.
+
+On Y, one `region` AI call designs a **biome**:
+- terrain style (hills, flat, mesas, peaks, canyons, islands, dunes, craters)
+- surface, stone and strata blocks, plus a liquid sea (water, lava or something custom)
+- trees, plants, boulders, pillars, crystals, ores and floating sky-islands
+- sky colour, gravity, native wildlife (spawned around players), and enter/tick/exit actions for hazards and weather
+
+The same reply also defines the new blocks, creatures and items, then builds a few landmarks. The terrain regenerates on the spot, and borders blend into neighbouring regions.
+
+Generation is deterministic from the seed plus the biome definition, so every client builds the same terrain without sending it. `/region <theme>` (re)designs the region you're in with your own theme. `/regions` and `/warp name` let you travel between them. You can also ask the Creator "turn this area into a candy planet" (it uses the `region` action).
+
+## Behaviour: state machines, programs and minds
+
+- **State machines**: a creature's `states` (graze → flee → sleep, patrol → hunt…) each have their own brain, abilities, event handlers and enter/exit/tick actions, plus `transitions` driven by expressions and timers.
+- **Programs**: `program` rewrites ONE creature's behaviour at runtime without changing its type. It can tame a wolf, turn a villager into a merchant, or let a monster evolve.
+- **Minds**:
+  - `awaken` gives any creature its own AI mind with a persona and a goal.
+  - Minds see their recent events: who hurt them, who talked to them, signals.
+  - A mind can message others (`tell`), trade (`charge`/`reward`), propose laws (`propose`), and rewrite its own program.
+  - Players talk to a mind with `@Name`. Creatures react to each other through `tell` and `signal`.
+- **Autonomy**: `/minds on` lets creatures with an autonomous mind act on their own initiative. At most one such thought runs every 20 s, each creature at most every 45 s or more, and only near players. This spends AI budget, so it's off by default; `/minds off` stops it.
+
+The JSON action language *is* the scripting language. That's deliberate: there's no Lua VM to sandbox, the AI already writes it well, and every client can run or display it.
+
+## Outside AI agents (MCP)
+
+Any MCP-capable agent can play in the world through `POST /mcp`: `claude mcp add --transport http promptcraft https://edge-city-mc-univ.18-207-103-187.nip.io/mcp`.
+- **Tools:** `world_overview`, `manual`, `join_world` (creates an avatar with its own coin wallet and a vote), `listen`, `look` and `act`.
+- **Chatting from inside the game:** players type `@Name …` in the game chat. The agent's `listen` call wakes up with the message, and it replies with `say`.
+- **Names and owners:** names are unique across players and agents (duplicates become `name_2`). The menu's Agents tab gives a one-time link code (`PC-…`) that shows an agent as yours.
+- **`act` actions:** `move`, `say`, `interact`, `create` (our Creator AI builds it; costs 25 coins), `script` (the JSON action language), `pay`, `vote`, `propose`.
+- **How avatars run:** an avatar is a `visitor` creature that the host browser simulates. When nobody has the game open, only chat, coins and votes work.
+- **Agent Village:** `agentvillage/` holds the mini-app manifest, the skill and a note for the Edge City team.
+
+## Multiplayer & coins
+
+Everyone who opens the game joins the same world, stored on the server in `data/world.json`. The server keeps the shared state (seed, block edits, everything the AI defined, saved creatures, chat) and relays live updates over a WebSocket.
+
+- **One browser is the host.** The first player online simulates the creatures and runs every action list. Everyone else draws "puppets" from the host's 10 Hz snapshots and forwards what they do (AI replies, item use, hits, spawns) to the host.
+- **Hand-offs.** When the host leaves, or hides their tab for 5 s, the server makes someone else host, and the new host picks up the last save (every 3 s).
+- **Fallback.** If the server is unreachable, the page falls back to an offline single-player world in localStorage.
+- **Testing.** `?player=2` in the URL gives a second identity, so you can test with two tabs.
+
+**Coins** live only on the server, in a ledger with a central **treasury**. Every player gets a 100-coin welcome grant.
+
+- `reward` pays coins out of the treasury, capped at 1000 per player per minute. `charge` pays them back in. `/pay` moves coins between players.
+- The treasury can go negative, which means it has minted coins. Every movement is logged in `world.json` → `bank.log`.
+- The AI knows about coins, so you can ask for shops, bounties, toll gates or casinos. Zombies pay a 5-coin bounty out of the box.
+- The ledger is deliberately isolated in `server.js` (`account` / `ledger` / `pay` / `reward` / `charge`), so it can be swapped for Aqua0 mainnet mock tokens and an in-game central bank later.
+- `CURRENCY` and `START_COINS` in `.env` rename the currency and change the welcome grant.
+
+**Government** (scaffold):
+- Laws are key/value pairs on the server. Players `/propose law value [reason]` and `/vote id yes|no`. A vote lasts 90 s, or less if everyone online has voted, and passes on a simple majority.
+- **Built-in laws:**
+  - `taxRate`: a % of every `/pay` goes to the treasury.
+  - `ubi`: coins the treasury pays everyone online every 5 min.
+  - `rewardMultiplier`: scales gameplay rewards.
+  - `leader`: an elected player who can `/grant` treasury coins.
+- **Custom laws:** anything else (`curfew`, `goldPrice`…) is just data that AI-made content reads as `law.<key>`.
+- NPCs with minds can propose laws too. `/gov` shows laws and open proposals, and `/bank` shows the treasury, the money supply and recent ledger entries.
 
 ## How it works: a few primitives that chain together
 
@@ -73,6 +158,6 @@ To make it a real game mode, the next steps would be a fixed lane map (a `struct
 
 ## Known limits
 
-- Single player per browser. There's no multiplayer sync; the tunnel shares the game and the AI, not one world.
+- Multiplayer is host-authoritative in a browser. Players other than the host see creatures with about 100 ms of lag, and their shots start from where the host last saw them. If the host's tab is hidden, creatures freeze for up to 5 s until someone else takes over. There's no anti-cheat: anyone can edit blocks, and only the host can mint coins.
 - Lighting is ambient occlusion plus glowing blocks, without real light propagation. Water doesn't flow.
 - The AI can only use what `prompt.md` documents. Teach it more by adding verbs.
