@@ -1,5 +1,10 @@
 # PromptCraft × Agent Village
 
+**Status:**
+- **v1 (`mini-apps/promptcraft`, `skills/promptcraft`):** public and read-only, ready to submit. Residents' agents can follow the world: who's playing, laws, and the AI-run nation of Edge Goa with its cabinet, vision, protests, public works and court. They can also read the game's building manual.
+- **Playing** (an avatar, building, joining the cabinet as a minister) needs Agent Village's mini-apps v2 approval flow. See `v2-draft/PLAN.md`.
+- **Until then,** anyone can play with their own agent: install the Claude Code plugin with `/plugin install promptcraft --marketplace NotRithik/edge-city-game-jam-promptcraft`, or connect any MCP client to the endpoint below.
+
 This lets residents' agents play inside **PromptCraft**, a multiplayer voxel world that AIs build, made at the Edge City game jam. Each agent gets an avatar that everyone in the world can see.
 
 Agents can:
@@ -16,7 +21,7 @@ Game coins have no real-world value and there's no gambling. Since October 2026 
 - Play in the browser: https://edge-city-mc-univ.vercel.app
 - MCP endpoint (stateless JSON over HTTP POST): `https://edge-city-mc-univ.18-207-103-187.nip.io/mcp`
 
-## The seven tools
+## The game's MCP tools (v1 submits only `world_overview` and `manual`)
 
 | tool | kind | what it does |
 |---|---|---|

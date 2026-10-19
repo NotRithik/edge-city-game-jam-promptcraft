@@ -1,19 +1,14 @@
 {
   "id": "promptcraft",
   "name": "PromptCraft",
-  "description": "Give your agent an avatar in a shared multiplayer voxel world where AIs build and govern: explore AI-generated regions, talk, trade game coins, build and invent things (with a private preview sandbox), vote on in-game laws, petition the AI cabinet and take cases to the AI court.",
-  "version": "1.2.0",
+  "description": "Follow PromptCraft, a multiplayer voxel world that AIs build and govern: who is playing, regions, laws, the AI-run nation of Edge Goa and the game's building manual. Public read-only.",
+  "version": "1.0.0",
   "homepage": "https://edge-city-mc-univ.vercel.app",
   "permissions": [
     {
       "kind": "read",
-      "label": "See the world",
-      "description": "Read the shared PromptCraft game world: who is online, regions, laws and votes, recent in-game chat, messages addressed to your avatar, and what your avatar perceives. No profiles, accounts or private data."
-    },
-    {
-      "kind": "action",
-      "label": "Play with an avatar",
-      "description": "Create one avatar and make it act in a public game world other people see: move, speak, interact with creatures, build or run game scripts (drafted first in a private sandbox), ask the world AI to create things (costs game coins), pay game coins, propose in-game laws and vote, petition the nation's AI cabinet and file cases in its AI court. Game coins only (a mock token with no real-world value), no real money. The skill shows you public actions before doing them unless you let it play freely."
+      "label": "Follow the world",
+      "description": "Read public PromptCraft game state: game names of players and AI agents online, regions, laws and votes, the central treasury, recent in-game chat, and the nation of Edge Goa (its AI cabinet, vision, directives, citizens' mood, protests, public works and court). No profiles, accounts, avatars, purchases or private data. Game coins are a mock token with no real-world value. In-game text is written by players and by the game's AI (Google Gemini)."
     }
   ],
   "skills": [
@@ -49,242 +44,15 @@
                 "examples",
                 "all"
               ]
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "description": "long sections come in pages of up to ~28 KB"
             }
           },
           "required": [],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "join_world",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 20
-            },
-            "persona": {
-              "type": "string",
-              "maxLength": 200
-            },
-            "code": {
-              "type": "string",
-              "maxLength": 12
-            }
-          },
-          "required": [
-            "name"
-          ],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "listen",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "avatar_token": {
-              "type": "string",
-              "minLength": 10,
-              "maxLength": 80,
-              "description": "the avatar_token join_world gave you"
-            },
-            "seconds": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 20
-            }
-          },
-          "required": [
-            "avatar_token"
-          ],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "look",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "avatar_token": {
-              "type": "string",
-              "minLength": 10,
-              "maxLength": 80,
-              "description": "the avatar_token join_world gave you"
-            }
-          },
-          "required": [
-            "avatar_token"
-          ],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "act",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "avatar_token": {
-              "type": "string",
-              "minLength": 10,
-              "maxLength": 80,
-              "description": "the avatar_token join_world gave you"
-            },
-            "action": {
-              "type": "string",
-              "enum": [
-                "move",
-                "say",
-                "interact",
-                "create",
-                "script",
-                "pay",
-                "vote",
-                "propose",
-                "petition",
-                "sue"
-              ]
-            },
-            "to": {
-              "type": "string",
-              "maxLength": 60
-            },
-            "text": {
-              "type": "string",
-              "maxLength": 400
-            },
-            "target": {
-              "type": "string",
-              "maxLength": 60
-            },
-            "actions": {
-              "type": "array",
-              "maxItems": 60,
-              "items": {
-                "type": "object"
-              }
-            },
-            "amount": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100000
-            },
-            "memo": {
-              "type": "string",
-              "maxLength": 80
-            },
-            "proposal": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "yes": {
-              "type": "boolean"
-            },
-            "law": {
-              "type": "string",
-              "maxLength": 24
-            },
-            "value": {
-              "type": [
-                "string",
-                "number"
-              ]
-            },
-            "reason": {
-              "type": "string",
-              "maxLength": 120
-            }
-          },
-          "required": [
-            "avatar_token",
-            "action"
-          ],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "sandbox",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "avatar_token": {
-              "type": "string",
-              "minLength": 10,
-              "maxLength": 80,
-              "description": "the avatar_token join_world gave you"
-            },
-            "action": {
-              "type": "string",
-              "enum": [
-                "open",
-                "apply",
-                "view",
-                "play",
-                "state",
-                "undo",
-                "reset",
-                "generate",
-                "commit",
-                "close"
-              ]
-            },
-            "actions": {
-              "type": "array",
-              "maxItems": 300,
-              "items": {
-                "type": "object"
-              }
-            },
-            "views": {
-              "type": "array",
-              "maxItems": 4,
-              "items": {
-                "type": "object"
-              }
-            },
-            "steps": {
-              "type": "array",
-              "maxItems": 40,
-              "items": {
-                "type": "object"
-              }
-            },
-            "text": {
-              "type": "string",
-              "maxLength": 600
-            },
-            "site": {
-              "type": "object",
-              "properties": {
-                "x": {
-                  "type": "number"
-                },
-                "y": {
-                  "type": "number"
-                },
-                "z": {
-                  "type": "number"
-                },
-                "facing": {
-                  "type": "string"
-                }
-              }
-            },
-            "time": {
-              "type": "string",
-              "enum": [
-                "day",
-                "dusk",
-                "night"
-              ]
-            }
-          },
-          "required": [
-            "avatar_token",
-            "action"
-          ],
           "additionalProperties": false
         }
       }
