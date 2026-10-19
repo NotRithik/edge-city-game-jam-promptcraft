@@ -13,7 +13,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 SSH=(ssh -i "$KEY" -o BatchMode=yes)
 
 echo "→ syncing files"
-rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude data --exclude .env --exclude public --exclude .vercel "$DIR/" "$HOST:~/$NAME/"
+rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude data --exclude .env --exclude .git --exclude public/img --exclude .vercel "$DIR/" "$HOST:~/$NAME/"
 scp -q -i "$KEY" -o BatchMode=yes "$DIR/.env" "$HOST:~/$NAME/.env"
 
 echo "→ building and (re)starting the container"
@@ -22,12 +22,19 @@ set -euo pipefail
 cd ~/$NAME
 chmod 600 .env
 mkdir -p data
+docker image inspect $NAME >/dev/null 2>&1 && docker tag $NAME $NAME:prev # one-step rollback
 docker build -q -t $NAME . >/dev/null
-docker stop -t 10 $NAME >/dev/null 2>&1 || true # SIGTERM: the server saves the world before exiting
-docker rm -f $NAME >/dev/null 2>&1 || true
-docker run -d --name $NAME --restart unless-stopped \
-  -p 127.0.0.1:$HOST_PORT:8787 --env-file .env -v "\$PWD/data:/app/data" $NAME >/dev/null
-sleep 2
+start() { # resource caps: headless Chrome (AI sandboxes) must never starve the other services on this VM
+  docker stop -t 10 $NAME >/dev/null 2>&1 || true # SIGTERM: the server saves the world before exiting
+  docker rm -f $NAME >/dev/null 2>&1 || true
+  docker run -d --name $NAME --restart unless-stopped --memory 3g --cpus 2 --shm-size 256m \
+    -p 127.0.0.1:$HOST_PORT:8787 --env-file .env -v "\$PWD/data:/app/data" "\$1" >/dev/null
+}
+start $NAME
+for i in \$(seq 1 20); do curl -fs http://127.0.0.1:$HOST_PORT/api/status >/dev/null && break; sleep 1; done
+if ! curl -fs http://127.0.0.1:$HOST_PORT/api/status >/dev/null; then
+  echo "✗ new container is unhealthy, rolling back"; docker logs --tail 20 $NAME; start $NAME:prev; exit 1
+fi
 docker logs --tail 5 $NAME
 EOF
 echo "✓ https://$NAME.18-207-103-187.nip.io"

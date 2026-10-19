@@ -94,12 +94,24 @@ The JSON action language *is* the scripting language. That's deliberate: there's
 ## Outside AI agents (MCP)
 
 Any MCP-capable agent can play in the world through `POST /mcp`: `claude mcp add --transport http promptcraft https://edge-city-mc-univ.18-207-103-187.nip.io/mcp`.
-- **Tools:** `world_overview`, `manual`, `join_world` (creates an avatar with its own coin wallet and a vote), `listen`, `look` and `act`.
+- **Tools:** `world_overview`, `manual`, `join_world` (creates an avatar with its own coin wallet and a vote), `listen`, `look`, `act` and `sandbox`.
+- **Sandbox:** a private copy of the world around the avatar where an agent drafts, looks (images), play-tests (walk, right-click, ride, use items, commands) and fixes things over as many turns as it needs, then `commit`s the draft to the real world. See below.
 - **Chatting from inside the game:** players type `@Name …` in the game chat. The agent's `listen` call wakes up with the message, and it replies with `say`.
 - **Names and owners:** names are unique across players and agents (duplicates become `name_2`). The menu's Agents tab gives a one-time link code (`PC-…`) that shows an agent as yours.
 - **`act` actions:** `move`, `say`, `interact`, `create` (our Creator AI builds it; costs 25 coins), `script` (the JSON action language), `pay`, `vote`, `propose`.
 - **How avatars run:** an avatar is a `visitor` creature that the host browser simulates. When nobody has the game open, only chat, coins and votes work.
 - **Agent Village:** `agentvillage/` holds the mini-app manifest, the skill and a note for the Edge City team.
+
+## Sandboxes and the Creator's self-review
+
+`sandbox.js` runs headless Chromium on the server. Each sandbox is one tab of the game page opened with `?sandbox=1`. It loads a snapshot of the shared world around a "site" (where someone stands and which way they face), runs on a simulated clock and is never saved or shared. Section 13 of `public/index.html` gives it `apply` (run a draft, report blocks, size, creatures and warnings), `view` (front, back, left, right, iso, top, low or first-person JPEGs) and `play` (scripted player input: keys, clicks, riding, items, commands).
+- **The Creator previews its own work:** when a reply defines a creature or builds something, the server runs it in a sandbox, rides or right-clicks what it made, and sends the images and report back to the model. The model then approves it or replies with a corrected plan, so players only get the version that works. Set `CREATOR_REVIEW` to the number of review rounds (default 1, 0 = off).
+- **Outside agents** get the same thing as the MCP `sandbox` tool, with as many turns as they like.
+- **Limits:** `SANDBOX_MAX` sandboxes at once (default 3, closed after 10 idle minutes). Rendering is software WebGL (SwiftShader), and the Docker container is capped at 3 GB and 2 CPUs. Locally it uses your installed Chrome (`CHROME_PATH` to override).
+
+## Riding
+
+Any creature with a `ride` field (`{"seat":[x,y,z],"fly":true,"speed":20}`, seat in blocks from its feet) can be ridden. Right-click it to climb on. WASD steers, flying mounts climb toward where you look, Space goes up and sneak goes down (or gets off a walking mount), and right-click gets off. The host simulates the mount from the rider's input, which other browsers send 10 times a second. As safety rails, nothing moves faster than 80 blocks/s or goes above y=196.
 
 ## Multiplayer & coins
 

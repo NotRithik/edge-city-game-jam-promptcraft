@@ -2,7 +2,7 @@
   "id": "promptcraft",
   "name": "PromptCraft",
   "description": "Give your agent an avatar in a shared multiplayer voxel world where AIs build: explore AI-generated regions, talk, trade game coins, build and invent things, and vote on in-game laws.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "homepage": "https://edge-city-mc-univ.vercel.app",
   "permissions": [
     {
@@ -193,6 +193,90 @@
             "reason": {
               "type": "string",
               "maxLength": 120
+            }
+          },
+          "required": [
+            "avatar_token",
+            "action"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "sandbox",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "avatar_token": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 80,
+              "description": "the avatar_token join_world gave you"
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "open",
+                "apply",
+                "view",
+                "play",
+                "state",
+                "undo",
+                "reset",
+                "generate",
+                "commit",
+                "close"
+              ]
+            },
+            "actions": {
+              "type": "array",
+              "maxItems": 300,
+              "items": {
+                "type": "object"
+              }
+            },
+            "views": {
+              "type": "array",
+              "maxItems": 4,
+              "items": {
+                "type": "object"
+              }
+            },
+            "steps": {
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "type": "object"
+              }
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 600
+            },
+            "site": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                },
+                "z": {
+                  "type": "number"
+                },
+                "facing": {
+                  "type": "string"
+                }
+              }
+            },
+            "time": {
+              "type": "string",
+              "enum": [
+                "day",
+                "dusk",
+                "night"
+              ]
             }
           },
           "required": [

@@ -302,7 +302,11 @@ const $ = (s) => document.querySelector(s);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
 const rnd = (a = 0, b = 1) => a + Math.random() * (b - a);
-const nowS = () => performance.now() / 1000;
+// ?sandbox: a private copy of the world that server.js drives in headless Chrome (section 13). It runs on a simulated clock.
+const SANDBOX = new URLSearchParams(location.search).has('sandbox');
+const SB = { on: SANDBOX, chat: [], edits: null, site: null, box: null };
+let simMs = null;
+const nowS = () => (simMs ?? performance.now()) / 1000;
 const arr = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);
 const titleCase = (k) => String(k).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 const normKey = (k) => String(k || '').toLowerCase().trim().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48);
@@ -704,6 +708,7 @@ function setBlock(x, y, z, id, record = true) {
   const c = chunks.get(ck(cx, cz));
   if (record) recordEdit(x, y, z, BLOCKS[id]?.key || 'air');
   if (record && net.online && !net.applying) net.editQ.push([x, y, z, BLOCKS[id]?.key || 'air']);
+  if (SB.edits && record) SB.edits.add(x + ',' + y + ',' + z);
   trackBlock(x, y, z, id);
   if (!c) return true;
   const i = idx(x - cx * CS, y, z - cz * CS);
@@ -1111,9 +1116,9 @@ function buildModel(e) {
   const col = { primary: C.primary || md.color || '#8fbf6f', secondary: C.secondary || C.primary || md.color || '#5a7a4a', accent: C.accent || C.primary || md.color || '#c9a27e', eyes: C.eyes || '#111111' };
   const list = [...(TEMPLATE_SIZE[tpl] ? templateParts(tpl, col) : templateParts('humanoid', col)), ...arr(md.parts)];
   const g = new THREE.Group(); e.parts = [];
-  let topY = 0;
-  for (const p of list.slice(0, 40)) {
-    const size = arr(p.size).length === 3 ? p.size.map((v) => clamp(+v || 0.1, 0.01, 8)) : [0.3, 0.3, 0.3];
+  let topY = 0, ext = 0;
+  for (const p of list.slice(0, 64)) {
+    const size = arr(p.size).length === 3 ? p.size.map((v) => clamp(+v || 0.1, 0.01, 64)) : [0.3, 0.3, 0.3];
     const at = arr(p.at).length === 3 ? p.at.map((v) => +v || 0) : [0, 0.5, 0];
     let obj;
     if (p.emoji) {
@@ -1134,9 +1139,10 @@ function buildModel(e) {
       for (const sx of [-1, 1]) { const eye = new THREE.Mesh(new THREE.BoxGeometry(ew, ew, 0.02), em); eye.position.set(sx * size[0] * 0.22, size[1] * 0.1, size[2] / 2 + 0.011); obj.add(eye); }
     }
     e.parts.push({ pivot, anim, base: pivot.position.clone(), i: e.parts.length });
-    topY = Math.max(topY, at[1] + size[1] / 2);
+    topY = Math.max(topY, at[1] + size[1] / 2); ext = Math.max(ext, Math.abs(at[0]) + size[0] / 2, Math.abs(at[2]) + size[2] / 2, at[1] + size[1] / 2);
   }
-  e.modelTop = topY || 1;
+  e.modelTop = topY || 1; e.modelExt = ext || 1;
+  if (ext * e.scale > 120) e.scale = 120 / ext; // keep giants within ~120 blocks
   g.scale.setScalar(e.scale);
   e.mesh = g; scene.add(g);
   e.nameTag = null; e.tagState = '';
@@ -1162,7 +1168,7 @@ class Entity {
     this.maxHp = Math.max(1, +d.hp || 20); this.hp = opts.hp ?? this.maxHp;
     this.baseSpeed = clamp(+(d.speed ?? 3), 0, 30); this.team = d.team || 'neutral';
     this.tags = new Set(arr(d.tags)); this.flying = !!d.flying || ['bird', 'floater'].includes(d.model?.template) && d.flying !== false;
-    this.gravity = d.gravity ?? 1; this.scale = clamp(+(d.model?.scale ?? d.scale ?? 1), 0.2, 8);
+    this.gravity = d.gravity ?? 1; this.scale = clamp(+(d.model?.scale ?? d.scale ?? 1), 0.05, 16);
     // explicit size = final hitbox at the def's scale; otherwise the template's size times scale
     const custom = arr(d.size).length === 2, sz = custom ? d.size : TEMPLATE_SIZE[d.model?.template || 'humanoid'] || [0.6, 1.8];
     this.w0 = clamp(+sz[0] || 0.6, 0.1, 12) / (custom && !this.isPlayer ? this.scale : 1); this.h0 = clamp(+sz[1] || 1.8, 0.1, 24) / (custom && !this.isPlayer ? this.scale : 1);
@@ -1340,11 +1346,13 @@ function physics(e, dt, wantUp = false) {
   const feet = blockDef(e.pos.x, e.pos.y + 0.1, e.pos.z), below = blockDef(e.pos.x, e.pos.y - 0.08, e.pos.z);
   const inLiquid = feet.liquid;
   const g = e.stat('gravity') * clamp(+(biomeAt(e.pos.x, e.pos.z)?.gravity ?? 1), 0.1, 3); // low-gravity moons, heavy worlds
-  if (e.flying || (e.isPlayer && playerFly)) { /* steering handles vertical */ }
+  if (e.flying || e._rideFly || (e.isPlayer && playerFly)) { /* steering handles vertical */ }
   else if (inLiquid) { e.vel.y = Math.max(e.vel.y - 9 * g * dt, -2.5); if (wantUp) e.vel.y = 3.2; }
   else e.vel.y = Math.max(e.vel.y - 28 * g * dt, -45);
+  capVel(e);
   const prevVy = e.vel.y;
   const blocked = moveBody(e, dt);
+  if (e.pos.y > MAX_Y) { e.pos.y = MAX_Y; if (e.vel.y > 0) e.vel.y = 0; }
   if (e.onGround) {
     const bd = below.def || {};
     if (bd.bounce > 0 && prevVy < -1) { e.vel.y = 6 + Math.min(+bd.bounce, 5) * 9; e.onGround = false; playSound('boing', e.pos, 0.5); }
@@ -1364,6 +1372,13 @@ function physics(e, dt, wantUp = false) {
   if (e.pos.y < -20) { if (e.isPlayer) respawnPlayer(); else removeEntity(e); }
   return blocked;
 }
+// safety rails: nothing moves faster than MAX_V blocks/s or rises above MAX_Y (runaway scripts used to fling players to y=27000)
+const MAX_V = 80, MAX_Y = WH + 100;
+function capVel(e) {
+  const v = e.vel; if (!Number.isFinite(v.x + v.y + v.z)) { e.vel = { x: 0, y: 0, z: 0 }; return; }
+  const s = Math.hypot(v.x, v.y, v.z); if (s > MAX_V) { v.x *= MAX_V / s; v.y *= MAX_V / s; v.z *= MAX_V / s; }
+}
+function safePos(p) { return p && Number.isFinite(p.x + p.y + p.z) ? { x: clamp(p.x, -1e6, 1e6), y: clamp(p.y, -10, MAX_Y), z: clamp(p.z, -1e6, 1e6) } : null; }
 function blockRef(x, y, z) {
   const k = x + ',' + y + ',' + z;
   let v = blockVars.get(k); if (!v) blockVars.set(k, (v = {}));
@@ -1386,12 +1401,14 @@ function updateEntity(e, dt, t) {
   }
   e.mods = e.mods.filter((m) => m.until > t || m.until === 0);
   if (e.isPlayer) return;
-  // brain decisions at ~5Hz
-  if (t >= e.nextBrain) { e.nextBrain = t + 0.2 + Math.random() * 0.1; tickStates(e, t); brainThink(e, t); }
+  const ridden = rideActive(e);
+  // brain decisions at ~5Hz (a ridden mount lets its rider steer)
+  if (t >= e.nextBrain) { e.nextBrain = t + 0.2 + Math.random() * 0.1; tickStates(e, t); if (!ridden) brainThink(e, t); }
   // steering
   const spd = e.stat('speed') * (e._speedMul || 1);
   let goal = e.moveGoal || e.goal, moving = false;
-  if (e.stunT > 0) e.stunT -= dt;
+  if (ridden) moving = rideSteer(e, dt);
+  else if (e.stunT > 0) e.stunT -= dt;
   else {
     let dx = 0, dz = 0, d = 0;
     if (goal) { dx = goal.x - e.pos.x; dz = goal.z - e.pos.z; d = Math.hypot(dx, dz); }
@@ -1411,11 +1428,11 @@ function updateEntity(e, dt, t) {
     }
   }
   const blocked = physics(e, dt, false);
-  if (blocked && moving && e.onGround && !e.flying) { e.vel.y = 8.4; }
+  if (blocked && moving && e.onGround && !e.flying && !e._rideFly) { e.vel.y = Math.max(8.4, Math.sqrt(56 * Math.min(8, e.h * 0.2))); } // big creatures step over bigger things
   if (blocked && e.flying) e.vel.y = Math.max(e.vel.y, 3);
   if (e.moveGoal && Math.hypot(e.moveGoal.x - e.pos.x, e.moveGoal.z - e.pos.z) < 1.3) e.moveGoal = null;
   // melee + abilities
-  if (e.target && !e.target.dead && e.melee && t >= (e.cool._melee || 0)) {
+  if (e.target && !e.target.dead && !ridden && e.melee && t >= (e.cool._melee || 0)) {
     const tp = e.target.pos, reach = (e.melee.range ?? 1.6) + e.w / 2 + (e.target.w || 0.6) / 2 - 0.3;
     if (Math.hypot(tp.x - e.pos.x, tp.z - e.pos.z) < reach && Math.abs(tp.y - e.pos.y) < Math.max(2, e.h)) {
       e.cool._melee = t + (e.melee.cooldown ?? 1); e.swing = 0.3;
@@ -1505,6 +1522,7 @@ function animateEntity(e, dt, t, moving) {
   // name tag / hp bar (only redrawn when it changes)
   const showTag = e.def.name || e.def.agent || e.def.boss || e.hp < e.maxHp;
   const tag = showTag ? `${e.def.name || e.def.agent || e.def.boss ? e.name : ''}${e.hp < e.maxHp ? ` ${'█'.repeat(Math.max(0, Math.ceil((e.hp / e.maxHp) * 8)))}${'░'.repeat(8 - Math.max(0, Math.ceil((e.hp / e.maxHp) * 8)))}` : ''}${e.thinking ? ' 💭' : ''}` : '';
+  if (e.nameTag) e.nameTag.visible = player?.riding !== e; // don't block the rider's view
   if (tag !== e.tagState) {
     e.tagState = tag;
     if (e.nameTag) { m.remove(e.nameTag); e.nameTag.material.map.dispose(); e.nameTag.material.dispose(); e.nameTag = null; }
@@ -1897,7 +1915,15 @@ function expandOps(ops, ox, oy, oz, out, spawns, depth = 0, mir = null) {
         break;
       }
       case 'use': { const s = DEFS.structure[normKey(op.name)]; if (s) expandOps(s.ops, ox + ax, oy + ay, oz + az, out, spawns, depth + 1); else warnOnce(`Unknown structure "${op.name}"`); break; }
-      case 'spawn': spawns.push({ type: op.type, x: ox + ax + 0.5, y: oy + ay, z: oz + az + 0.5, count: clamp(+op.count || 1, 1, 30), vars: op.vars }); break;
+      case 'spawn': spawns.push({ type: op.type, x: ox + ax + 0.5, y: oy + ay, z: oz + az + 0.5, count: clamp(+op.count || 1, 1, 30), vars: op.vars, yaw: op.yaw }); break;
+      case 'rotate': { // quarter turns about the op's origin (same direction as a creature's yaw)
+        const q = ((Math.round((+op.angle || (+op.turns || 0) * 90) / 90) % 4) + 4) % 4, tmp = new Map(), sp = [];
+        expandOps(op.ops, 0, 0, 0, tmp, sp, depth + 1);
+        const R = (x, z) => (q === 1 ? [z, -x] : q === 2 ? [-x, -z] : q === 3 ? [-z, x] : [x, z]);
+        for (const [x, y, z, id] of tmp.values()) { const [rx, rz] = R(x, z); put(ox + ax + rx, oy + ay + y, oz + az + rz, id); }
+        for (const p of sp) { const [rx, rz] = R(p.x - 0.5, p.z - 0.5); spawns.push({ ...p, x: ox + ax + rx + 0.5, y: oy + ay + p.y, z: oz + az + rz + 0.5, yaw: (+p.yaw || 0) + q * 90 }); }
+        break;
+      }
       default: warnOnce(`Unknown build op "${op.op}"`);
     }
   }
@@ -1928,7 +1954,7 @@ function flushJob(job, n) {
   }
   if (job.i >= job.list.length && !job.done) {
     job.done = true;
-    for (const s of job.spawns) for (let k = 0; k < s.count; k++) spawnEntity(s.type, { x: s.x + rnd(-0.3, 0.3), y: s.y, z: s.z + rnd(-0.3, 0.3) }, { vars: s.vars });
+    for (const s of job.spawns) for (let k = 0; k < s.count; k++) { const e = spawnEntity(s.type, { x: s.x + rnd(-0.3, 0.3), y: s.y, z: s.z + rnd(-0.3, 0.3) }, { vars: s.vars }); if (e && s.yaw !== undefined) e.yaw = ((+s.yaw || 0) * Math.PI) / 180; }
   }
   return placed;
 }
@@ -2127,14 +2153,16 @@ const VERBS = {
     let o = toPos(a.at, c, 'look'); if (!o) return;
     ensureChunk(o.x, o.z);
     if (a.ground !== false) o.y = surfaceY(Math.floor(o.x), Math.floor(o.z), Math.floor(o.y) + 6) + 1;
-    const job = startBuild(a.ops ?? (a.structure ? [{ op: 'use', name: a.structure }] : []), o, { speed: num(a.speed, c, 600), builder: c.self instanceof Entity ? c.self : null, instant: !!a.instant });
+    let ops = a.ops ?? (a.structure ? [{ op: 'use', name: a.structure }] : []);
+    if (a.rotate) ops = [{ op: 'rotate', angle: num(a.rotate, c), ops }];
+    const job = startBuild(ops, o, { speed: num(a.speed, c, 600), builder: c.self instanceof Entity ? c.self : null, instant: !!a.instant });
     c.vars.buildOrigin = job.origin;
     if (a.wait !== false) while (!job.done && buildJobs.includes(job)) yield 0.1;
   },
   setBlock: (a, c) => { const p = toPos(a.at, c, 'pos'); if (p) setBlock(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), blockIdOf(a.block)); },
   explode: (a, c) => { const p = toPos(a.at, c, 'pos') || posOf(c.self); if (p) explode(p, num(a.power, c, 3), num(a.damage, c, num(a.power, c, 3) * 3), a.breakBlocks !== false, c.self instanceof Entity ? c.self : null, !!a.fire); },
   // creatures
-  spawn: (a, c) => { const p = toPos(a.at, c, 'self ^0 ^0 ^2'); if (!p) return; const n = clamp(Math.round(num(a.count, c, 1)), 1, 30); for (let i = 0; i < n; i++) { const e = spawnEntity(a.type, { x: p.x + (n > 1 ? rnd(-1.5, 1.5) : 0), y: p.y + 0.05, z: p.z + (n > 1 ? rnd(-1.5, 1.5) : 0) }, { vars: a.vars, owner: a.owned === false ? null : c.self instanceof Entity ? c.self : null, name: a.name }); if (e) { c.spawned = e; if (a.team) e.team = a.team; } } },
+  spawn: (a, c) => { const p = toPos(a.at, c, 'self ^0 ^0 ^2'); if (!p) return; const n = clamp(Math.round(num(a.count, c, 1)), 1, 30); for (let i = 0; i < n; i++) { const e = spawnEntity(a.type, { x: p.x + (n > 1 ? rnd(-1.5, 1.5) : 0), y: p.y + 0.05, z: p.z + (n > 1 ? rnd(-1.5, 1.5) : 0) }, { vars: a.vars, owner: a.owned === false ? null : c.self instanceof Entity ? c.self : null, name: a.name }); if (e) { c.spawned = e; if (a.team) e.team = a.team; if (a.yaw !== undefined) e.yaw = (num(a.yaw, c) * Math.PI) / 180; } } },
   damage: (a, c) => { for (const e of ents(a, c)) damage(e, num(a.amount, c, 2), c.self instanceof Entity ? c.self : c.source); },
   heal: (a, c) => { for (const e of ents(a, c, 'self')) heal(e, num(a.amount, c, 4)); },
   kill: (a, c) => { for (const e of ents(a, c)) kill(e, c.self instanceof Entity ? c.self : null); },
@@ -2147,7 +2175,7 @@ const VERBS = {
       push(e, d, num(a.force, c, 8)); if (a.up) e.vel.y += num(a.up, c, 0);
     }
   },
-  teleport: (a, c) => { const p = toPos(a.to, c, 'look'); if (!p) return; for (const e of ents(a, c, 'self')) { if (e.isRemote) { netSend({ t: 'pfx', to: e.pid, fx: 'tp', p: P3(p) }); continue; } burst(e.center(), '#c9a0ff', 16, 3); e.pos.x = p.x; e.pos.y = p.y + 0.05; e.pos.z = p.z; e.vel = { x: 0, y: 0, z: 0 }; burst(e.center(), '#c9a0ff', 16, 3); } playSound('teleport', p); },
+  teleport: (a, c) => { const p = safePos(toPos(a.to, c, 'look')); if (!p) return; for (const e of ents(a, c, 'self')) { if (e.isRemote) { netSend({ t: 'pfx', to: e.pid, fx: 'tp', p: P3(p) }); continue; } if (e === player && player.riding) dismount(); burst(e.center(), '#c9a0ff', 16, 3); e.pos.x = p.x; e.pos.y = p.y + 0.05; e.pos.z = p.z; e.vel = { x: 0, y: 0, z: 0 }; burst(e.center(), '#c9a0ff', 16, 3); } playSound('teleport', p); },
   effect: (a, c) => { for (const e of ents(a, c)) applyStatus(e, a.name ?? a.status, num(a.seconds, c, 5), num(a.power, c, 1)); },
   cure: (a, c) => { for (const e of ents(a, c, 'self')) { if (a.name) e.statuses.delete(normKey(a.name)); else e.statuses.clear(); } },
   setStat: (a, c) => {
@@ -2311,13 +2339,19 @@ function rayAABB(o, d, x0, y0, z0, x1, y1, z1) {
   }
   return tmin;
 }
+const _rc = new THREE.Raycaster(), _ro = new THREE.Vector3(), _rd = new THREE.Vector3(); _rc.camera = camera;
 function updateTargeting() {
   const eye = player.eye(), d = facing(player);
   lookBlk = raycastBlocks(eye, d, 7);
   lookEnt = null; let bt = lookBlk ? lookBlk.t : 5;
   for (const e of entities) {
     if (e.def.isProjectile || e.dead) continue;
-    const hw = e.w / 2, t = rayAABB(eye, d, e.pos.x - hw, e.pos.y, e.pos.z - hw, e.pos.x + hw, e.pos.y + e.h, e.pos.z + hw);
+    const hw = e.w / 2, sc = e.curScale(); let t = rayAABB(eye, d, e.pos.x - hw, e.pos.y, e.pos.z - hw, e.pos.x + hw, e.pos.y + e.h, e.pos.z + hw);
+    if (t == null && e.mesh && ((e.modelExt || 0) * sc > hw + 1 || (e.modelTop || 0) * sc > e.h + 1) && dist3(eye, e.pos) < (e.modelExt || 0) * sc + (e.modelTop || 0) * sc + 6) {
+      // giants (planes, kaiju): the model is bigger than the hitbox, so test the model's own boxes
+      _rc.set(_ro.set(eye.x, eye.y, eye.z), _rd.set(d.x, d.y, d.z)); _rc.far = 5;
+      const hit = _rc.intersectObject(e.mesh, true).find((h) => h.object !== e.nameTag); if (hit) t = hit.distance;
+    }
     if (t != null && t < Math.min(bt, 5)) { bt = t; lookEnt = e; }
   }
   if (lookBlk && !lookEnt) { selBox.visible = true; selBox.position.set(lookBlk.x + 0.5, lookBlk.y + 0.5, lookBlk.z + 0.5); } else selBox.visible = false;
@@ -2356,6 +2390,8 @@ function breakBlock(hit, drops) {
 }
 function secondaryAction() { // right click: interact, open stations, equip armour, eat, use items, place
   const slot = inv[sel], sneak = held('sprint');
+  if (player.riding) { if (nowS() - player.rideT > 0.4) dismount(); return; }
+  if (lookEnt && rideOf(lookEnt) && !sneak && mount(lookEnt)) return;
   if (lookEnt && lookEnt.def.on?.interact && !sneak) { fireEvent(lookEnt, 'interact', { target: player, source: player, byPlayer: true }); track('interact', lookEnt.type); return; }
   if (lookBlk && !sneak) {
     const b = BLOCKS[lookBlk.id], st = b.def?.station;
@@ -2405,11 +2441,83 @@ function settlePlayer() { // move a fresh spawn out from under trees onto open g
     if (k === 'grass' || k === 'sand' || k === 'snow') { player.pos.x = x + 0.5; player.pos.y = y + 1.05; player.pos.z = z + 0.5; spawnPoint = { ...player.pos }; return; }
   }
 }
+// ---- riding: def.ride = { seat:[x,y,z] (blocks from its feet, turning with it; default: on top), fly, speed }. The rider steers with WASD
+// (flying mounts climb where you look), jump = jump / climb, sneak = get off (flying mounts: descend), right-click = get off.
+// The host simulates the mount from its rider's input (e.rider); riders on other browsers send it 10x a second.
+function rideOf(e) { const r = e?.def?.ride; return r ? (typeof r === 'object' ? r : {}) : null; }
+function seatPos(e) {
+  const r = rideOf(e) || {}, sc = e.curScale(), top = Math.max(e.h, (e.modelTop || 0) * sc), reach = Math.max(e.w / 2, (e.modelExt || 0) * sc) + 1, raw = arr(r.seat ?? r.offset);
+  const s = raw.length === 3 ? [clamp(+raw[0] || 0, -reach, reach), clamp(+raw[1] || 0, 0, top + 2), clamp(+raw[2] || 0, -reach, reach)] : [0, top, 0], c = Math.cos(e.yaw), sn = Math.sin(e.yaw);
+  return { x: e.pos.x + s[0] * c + s[2] * sn, y: e.pos.y + s[1], z: e.pos.z - s[0] * sn + s[2] * c };
+}
+function rideActive(e) {
+  const R = e.rider; if (!R) return false;
+  if (nowS() - R.t < 0.6 && !R.who?.dead && !e.dead && (R.who === player || net.players.has(R.who?.pid))) return true;
+  e.rider = null; e._rideFly = false;
+  if (!e.dead) fireEvent(e, 'dismount', { target: R.who, source: R.who, byPlayer: true });
+  return false;
+}
+function rideSteer(e, dt) {
+  const r = rideOf(e) || {}, [mx = 0, my = 0, mz = 0, up = 0, down = 0] = e.rider.in, fly = !!(r.fly ?? e.flying);
+  const spd = clamp(+r.speed || Math.max(e.stat('speed'), 6), 0, MAX_V) * (e._speedMul || 1);
+  e._rideFly = fly; e.stunT = 0; e.goal = e.moveGoal = null; e.target = null;
+  const k = Math.min(1, dt * (fly ? 2.5 : e.onGround ? 8 * (e._friction ?? 1) : 1.5));
+  e.vel.x = lerp(e.vel.x, mx * spd, k); e.vel.z = lerp(e.vel.z, mz * spd, k);
+  if (fly) e.vel.y = lerp(e.vel.y, clamp(my + (up - down) * 0.6, -1, 1) * spd, k);
+  else if (up && e.onGround) e.vel.y = 8.4 * clamp(Math.sqrt(e.curScale()), 1, 2);
+  const hv = Math.hypot(mx, mz); if (hv > 0.05) e.yaw = lerpAngle(e.yaw, Math.atan2(mx, mz), Math.min(1, dt * 5));
+  return hv > 0.05;
+}
+function mount(e) {
+  const r = rideOf(e); if (!r || e.dead || player.riding) return false;
+  if (isHost()) {
+    if (e.rider && rideActive(e) && e.rider.who !== player) { toast(`${e.name} already has a rider`); return false; }
+    e.rider = { who: player, in: [0, 0, 0, 0, 0], t: nowS() }; e.target = null;
+    fireEvent(e, 'mount', { target: player, source: player, byPlayer: true });
+  } else netSend({ t: 'ride', eid: e.id, on: 1 });
+  player.riding = e; player.rideT = nowS(); player.vel = { x: 0, y: 0, z: 0 }; player._sneakWas = true;
+  const fly = !!(r.fly ?? e.flying);
+  toast(`🐎 Riding ${e.name}: WASD steer${fly ? ' (look up/down to climb/dive)' : ''} · ${keyName(KB.jump)} ${fly ? 'up' : 'jump'} · ${keyName(KB.sprint)} ${fly ? 'down' : 'get off'} · right-click get off`);
+  track('ride', e.type);
+  return true;
+}
+function dismount() {
+  const e = player.riding; if (!e) return; player.riding = null;
+  const side = e.w / 2 + 0.9; let p = { x: e.pos.x + Math.cos(e.yaw) * side, y: e.pos.y + 0.05, z: e.pos.z - Math.sin(e.yaw) * side };
+  if (collides(p.x, p.y, p.z, player.w, player.h)) p = seatPos(e);
+  Object.assign(player.pos, safePos(p) || player.pos); player.vel = { x: 0, y: 0, z: 0 }; player._fallTop = null;
+  if (isHost()) { if (e.rider?.who === player) { e.rider = null; e._rideFly = false; if (!e.dead) fireEvent(e, 'dismount', { target: player, source: player, byPlayer: true }); } }
+  else netSend({ t: 'ride', eid: e.id, on: 0 });
+}
+function rideInput(active) { // world-space steering from the rider's keys + look
+  const e = player.riding, r = rideOf(e) || {}, fly = !!(r.fly ?? e.flying);
+  const cp = Math.cos(look.pitch), sp = Math.sin(look.pitch), fx = -Math.sin(look.yaw), fz = -Math.cos(look.yaw), rx = Math.cos(look.yaw), rz = -Math.sin(look.yaw);
+  let mx = 0, my = 0, mz = 0;
+  if (active) {
+    if (held('forward')) { mx += fx * (fly ? cp : 1); mz += fz * (fly ? cp : 1); my += fly ? sp : 0; }
+    if (held('back')) { mx -= fx * (fly ? cp : 1); mz -= fz * (fly ? cp : 1); my -= fly ? sp : 0; }
+    if (held('right')) { mx += rx; mz += rz; } if (held('left')) { mx -= rx; mz -= rz; }
+  }
+  const l = Math.hypot(mx, my, mz); if (l > 1) { mx /= l; my /= l; mz /= l; }
+  const sneak = active && held('sprint');
+  if (!fly && sneak && !player._sneakWas) { player._sneakWas = sneak; dismount(); return; }
+  player._sneakWas = sneak;
+  const inp = [r2(mx), r2(my), r2(mz), active && held('jump') ? 1 : 0, sneak ? 1 : 0];
+  if (isHost()) { if (e.rider?.who === player) { e.rider.in = inp; e.rider.t = nowS(); } else if (!rideActive(e)) { e.rider = { who: player, in: inp, t: nowS() }; } }
+  else if (nowS() >= (player._rideSendT || 0)) { player._rideSendT = nowS() + 0.1; netSend({ t: 'ride', eid: e.id, on: 1, in: inp }); }
+}
+function seatRider() { // after the mount moved this frame: put the rider in the seat and the camera at their eyes
+  const e = player.riding;
+  if (e.dead || !entities.includes(e)) { dismount(); return; }
+  const s = seatPos(e); Object.assign(player.pos, s); player.vel = { x: e.vel.x, y: e.vel.y, z: e.vel.z }; player.onGround = true; player._fallTop = null; player._lastY = s.y;
+  camera.position.set(s.x, s.y + 1.62, s.z); camera.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
+}
 function updatePlayer(dt) {
   const c = chunks.get(ck(Math.floor(player.pos.x / CS), Math.floor(player.pos.z / CS)));
   if (!c || !c.meshed) return;
   if (needSettle) { needSettle = false; settlePlayer(); }
   const active = playing && !uiMode;
+  if (player.riding) { player.yaw = look.yaw + Math.PI; player.pitch = look.pitch; rideInput(active); return; }
   const fx = -Math.sin(look.yaw), fz = -Math.cos(look.yaw), rx = Math.cos(look.yaw), rz = -Math.sin(look.yaw);
   let mx = 0, mz = 0;
   if (active) { if (held('forward')) { mx += fx; mz += fz; } if (held('back')) { mx -= fx; mz -= fz; } if (held('right')) { mx += rx; mz += rz; } if (held('left')) { mx -= rx; mz -= rz; } }
@@ -2627,7 +2735,8 @@ async function askAI(prompt, { self = null, quiet = false, agent = null, region 
   const label = agent ? `${agent.name} is thinking` : region ? `Generating region ${region.scan.name}` : `Creator: "${prompt.slice(0, 40)}${prompt.length > 40 ? '…' : ''}"`;
   if (!agent) ai.creatorBusy++;
   setThinking(id, label);
-  const res = await api('/api/ai', { player: playerName, role: agent ? 'agent' : region ? 'region' : 'creator', prompt, context: agent ? agentContext(agent) : region ? regionContext(region) : creatorContext(self) });
+  const site = !agent && !region && !self && net.online ? { pos: P3(player.pos), yaw: r2(look.yaw), pitch: r2(look.pitch) } : undefined; // lets the Creator preview its draft from where you stand
+  const res = await api('/api/ai', { player: playerName, role: agent ? 'agent' : region ? 'region' : 'creator', prompt, context: agent ? agentContext(agent) : region ? regionContext(region) : creatorContext(self), site });
   setThinking(id, null);
   if (!agent) ai.creatorBusy--;
   if (!res.ok) {
@@ -2687,6 +2796,7 @@ function tickAgents(t) {
 const chatLog = [];
 function chatLine(html, cls = 'sys', old = false) {
   chatLog.push([html, cls]); if (chatLog.length > 200) chatLog.shift();
+  if (SB.on) SB.chat.push(html.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
   const el = document.createElement('div'); el.className = cls + (old ? ' old' : ''); el.innerHTML = html;
   const box = $('#chat'); box.appendChild(el);
   while (box.children.length > 200) box.firstChild.remove();
@@ -2696,12 +2806,13 @@ function chatLine(html, cls = 'sys', old = false) {
 let lastSys = '';
 function sysMsg(m, cls = 'sys', dedupe = false) { if (dedupe && m === lastSys) return; lastSys = m; chatLine(esc(m), cls); }
 function toast(m) {
+  if (SB.on) SB.chat.push('[toast] ' + m);
   const box = $('#toasts'), el = document.createElement('div'); el.textContent = m; box.appendChild(el);
   while (box.children.length > 4) box.firstChild.remove();
   setTimeout(() => el.remove(), 3500);
 }
 let titleTimer = null;
-function showTitle(t, secs = 2.5, color) { const el = $('#title'); el.textContent = t; el.style.color = color ? hex(color) : '#fff'; el.style.opacity = 1; clearTimeout(titleTimer); titleTimer = setTimeout(() => (el.style.opacity = 0), secs * 1000); }
+function showTitle(t, secs = 2.5, color) { if (SB.on) SB.chat.push('[title] ' + t); const el = $('#title'); el.textContent = t; el.style.color = color ? hex(color) : '#fff'; el.style.opacity = 1; clearTimeout(titleTimer); titleTimer = setTimeout(() => (el.style.opacity = 0), secs * 1000); }
 const hurtEl = document.createElement('div'); hurtEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;background:radial-gradient(transparent 50%,rgba(255,0,0,.45));opacity:0;transition:opacity .3s';
 document.body.appendChild(hurtEl);
 function flashHurt() { hurtEl.style.opacity = 1; setTimeout(() => (hurtEl.style.opacity = 0), 150); }
@@ -3544,9 +3655,10 @@ function applyPfx(m) { // the host did something to *this* player
     case 'dmg': damage(player, m.n); break; case 'heal': heal(player, m.n); break; case 'kill': kill(player); break;
     case 'push': push(player, { x: m.v[0], y: m.v[1], z: m.v[2] }, 1); break;
     case 'status': applyStatus(player, m.name, m.secs, m.power); break;
-    case 'tp': Object.assign(player.pos, m.p); player.vel = { x: 0, y: 0, z: 0 }; break;
+    case 'tp': if (player.riding) dismount(); Object.assign(player.pos, safePos(m.p) || player.pos); player.vel = { x: 0, y: 0, z: 0 }; break;
     case 'give': giveItem(m.s); break; case 'msg': chatLine(esc(m.text), 'sys'); break; case 'toast': toast(m.text); break;
     case 'ask': askAI(m.prompt, { quiet: m.quiet }); break;
+    case 'unride': if (player.riding) { player.riding = null; } toast(m.text); break;
   }
 }
 function hostIntent(m) { // another player asked the host to do something
@@ -3560,6 +3672,15 @@ function hostIntent(m) { // another player asked the host to do something
       break;
     }
     case 'spawn': if (m.pos) spawnEntity(m.type, m.pos); break;
+    case 'ride': {
+      const e = refIn({ e: m.eid }); if (!e || e.dead || !rideOf(e)) break;
+      if (!m.on) { if (e.rider?.who === who) { e.rider = null; e._rideFly = false; fireEvent(e, 'dismount', { target: who, source: who, byPlayer: true }); } break; }
+      if (e.rider && e.rider.who !== who && rideActive(e)) { netSend({ t: 'pfx', to: who.pid, fx: 'unride', text: `${e.name} already has a rider` }); break; }
+      const fresh = e.rider?.who !== who;
+      e.rider = { who, in: arr(m.in).slice(0, 5).map((v) => clamp(+v || 0, -1, 1)), t: nowS() };
+      if (fresh) { e.target = null; fireEvent(e, 'mount', { target: who, source: who, byPlayer: true }); }
+      break;
+    }
     case 'agentnote': { const e = refIn({ e: m.id }); if (!e?.def?.agent) break; if (m.say) speak(e, m.say, 8); if (m.note) { e.memory.push(`[t+${Math.round(e.age)}s] ${m.note}`.slice(0, 300)); if (e.memory.length > 14) e.memory.shift(); } break; }
     case 'cmd': if (m.cmd === 'undo') undoLast(); else if (m.cmd === 'killall') clearMobs(); break;
   }
@@ -3602,7 +3723,7 @@ function onNet(m) {
       case 'ledger': { const w = net.waits.get(m.rid); if (w) { net.waits.delete(m.rid); w(m); } break; }
       case 'notice': toast(m.text); chatLine(esc(m.text), 'sys'); break;
       case 'kicked': net.kicked = true; break;
-      case 'run': case 'hit': case 'spawn': case 'agentnote': case 'cmd': if (net.isHost) hostIntent(m); break;
+      case 'run': case 'hit': case 'spawn': case 'ride': case 'agentnote': case 'cmd': if (net.isHost) hostIntent(m); break;
     }
   } catch (err) { console.warn('[net]', m.t, err); }
   net.applying = false;
@@ -3673,6 +3794,7 @@ function hostAgentOp(m) {
       case 'look': return reply(true, '', agentView(e, m.since || 0));
       case 'say': speak(e, m.text, 8, true); return reply(true, 'said');
       case 'context': return reply(true, '', { context: viewContext(e) });
+      case 'pose': return reply(true, '', { pos: P3(e.pos), yaw: r2(e.yaw - Math.PI), pitch: 0 }); // look-space yaw, like a player's camera
       case 'move': {
         const t = resolveMoveTarget(e, m.to);
         if (!t) return reply(false, `Don't know where "${m.to}" is. Use a name from look (player, creature or region), "x,z", "north 20" or "spawn".`);
@@ -3694,6 +3816,10 @@ function hostAgentOp(m) {
       case 'script': {
         const list = arr(m.actions).slice(0, m.trusted ? 300 : 60), unknown = [...new Set(list.map((x) => x?.do).filter((v) => !VERBS[v]))];
         if (unknown.length && !m.trusted) return reply(false, `Unknown actions: ${unknown.join(', ')}. Read the manual tool.`);
+        if (m.site?.pos) { // a sandbox draft: stand where it was previewed, facing the same way, so relative positions land the same
+          ensureArea(m.site.pos.x, m.site.pos.z); Object.assign(e.pos, safePos(m.site.pos) || e.pos); e.yaw = (+m.site.yaw || 0) + Math.PI; e.pitch = 0;
+          e.vel = { x: 0, y: 0, z: 0 }; e.home = { ...e.pos }; e.moveGoal = e.goal = null;
+        }
         const sink = []; warnSink = sink;
         try { runActions(list, { self: e, pos: lookHit(e), vars: {}, player: e }); } finally { warnSink = null; }
         return reply(true, `Ran ${list.length} actions as ${e.name}.${sink.length ? ' Problems: ' + [...new Set(sink)].slice(0, 6).join('; ') : ''}`);
@@ -4097,6 +4223,212 @@ function load() {
   return true;
 }
 function restoreState(en, s) { if (s.state && en.def.states?.[s.state]) { en.state = s.state; en.stateT = nowS(); applyStateBrain(en); } en.ambient = !!s.ambient; }
+// ---------------------------------------------------------------- 13. sandbox (?sandbox=1)
+// server.js opens this page in headless Chrome for an AI that wants to preview its work: load a copy of the shared world
+// (window.__sbLoad), run a draft (sandbox.apply), look at it from any side (sandbox.view) and play-test it exactly like a
+// player would: keys, clicks, riding, items, commands (sandbox.play). Nothing here is saved or sent to anyone.
+function startSandbox(w) {
+  SEED = w.seed; RD = clamp(+w.rd || 6, 3, 10); applyRenderDistance();
+  net.applying = true;
+  for (const kind of ['block', 'ability', 'structure', 'item', 'entity', 'rule', 'biome']) for (const d of Object.values(w.defs?.[kind] || {})) { try { registerDef(kind, d, true); } catch (err) { console.warn(err); } }
+  for (const [k, m] of Object.entries(w.edits || {})) editsByChunk.set(k, new Map(Object.entries(m).map(([i, key]) => [+i, key])));
+  for (const [k, r] of Object.entries(w.regions || {})) regions.set(k, r);
+  anyBiomes = [...regions.values()].some((x) => x.status === 'ready');
+  Object.assign(globals, w.globals || {}); if (w.sky) applySky({ ...w.sky });
+  net.applying = false;
+  sbTime(w.time || 'day');
+  const s = w.site || {};
+  spawnPoint = s.pos ? { ...s.pos } : groundSpawn();
+  makePlayer(spawnPoint); if (!s.pos) needSettle = true;
+  look.yaw = +s.yaw || 0; look.pitch = +s.pitch || 0;
+  for (const e of w.entities || []) {
+    if (!DEFS.entity[e.type]) continue;
+    const en = new Entity(e.type, e.pos, { vars: e.vars, hp: e.hp, name: e.name, own: e.own });
+    if (e.id) en.id = e.id; en.home = e.home || { ...en.pos }; if (e.team) en.team = e.team; restoreState(en, e); entities.push(en);
+  }
+  nextEid = Math.max(nextEid, ...entities.map((e) => e.id + 1));
+  gameMode = 'creative'; playing = true; simMs = performance.now();
+}
+function sbBoot(w) { // after the whole page script has initialised (ticking needs it)
+  sbMesh(player.pos.x, player.pos.z);
+  { const p = player.pos, g = surfaceY(Math.floor(p.x), Math.floor(p.z), Math.floor(p.y) + 1); // stand on the ground, not in mid-air or inside a hill
+    if (collides(p.x, p.y, p.z, player.w, player.h)) p.y = surfaceY(Math.floor(p.x), Math.floor(p.z)) + 1.02; else if (p.y - g - 1 > 1.5 && !w.site?.air) p.y = g + 1.02; }
+  sbStep(0.5);
+  SB.site = { pos: { ...player.pos }, yaw: look.yaw, pitch: look.pitch };
+  window.__sbReady = true;
+}
+function sbTime(t) { const want = t === 'night' ? 0.75 : t === 'dusk' ? 0.48 : 0.25; globals._clock = want * DAY_LEN - ((Date.now() / 1000) % DAY_LEN); }
+function sbStep(seconds = 1, dt = 1 / 30) { // advance the simulated clock; builds finish instantly
+  const n = clamp(Math.round(seconds / dt), 1, 3600);
+  for (let i = 0; i < n; i++) { simMs += dt * 1000; for (const j of buildJobs) flushJob(j, Infinity); tick(dt); }
+}
+function sbMesh(x, z) { for (let i = 0; i < 400; i++) { const n = chunks.size; updateChunks(x, z, 1e9); if (chunks.size === n && !dirty.size) break; } }
+function sbPose(p) { Object.assign(player.pos, p.pos); player.vel = { x: 0, y: 0, z: 0 }; look.yaw = p.yaw; look.pitch = p.pitch; player.yaw = look.yaw + Math.PI; player.pitch = look.pitch; updateTargeting(); }
+function sbFind(q) { // a creature by id, name or type, nearest to the player first
+  if (q == null || q === '') return null;
+  const s = String(q).toLowerCase(), k = normKey(q);
+  const hit = (e) => String(e.id) === s || e.name.toLowerCase() === s || e.type === k;
+  const list = entities.filter((e) => !e.dead && !e.def.isProjectile && (hit(e) || e.name.toLowerCase().includes(s)));
+  return list.sort((a, b) => hit(b) - hit(a) || dist3(a.pos, player.pos) - dist3(b.pos, player.pos))[0] || null;
+}
+function sbEntBox(e) { const r = Math.max(e.w / 2, (e.modelExt || 0) * e.curScale()), h = Math.max(e.h, (e.modelTop || 0) * e.curScale()); return [e.pos.x - r, e.pos.y, e.pos.z - r, e.pos.x + r, e.pos.y + h, e.pos.z + r]; }
+function sbBox(spec) {
+  if (arr(spec.box).length === 6) return spec.box.map(Number);
+  if (spec.entity != null) { const e = sbFind(spec.entity); if (e) return sbEntBox(e); }
+  if (arr(spec.at).length === 3) { const [x, y, z] = spec.at.map(Number), r = +spec.size || 8; return [x - r, y - 1, z - r, x + r, y + r, z + r]; }
+  if (SB.box) return SB.box;
+  const p = SB.site.pos; return [p.x - 8, p.y - 1, p.z - 8, p.x + 8, p.y + 8, p.z + 8];
+}
+const VIEWS = { front: [0, 0.3], back: [180, 0.3], left: [-90, 0.3], right: [90, 0.3], iso: [35, 0.55], iso_back: [215, 0.55], top: [0, 1.5], low: [0, 0.05] };
+function sbView(spec = {}) { // -> JPEG data URL. "front" = seen from where the requester stood, facing the way they faced
+  if (spec.time) sbTime(spec.time);
+  const name = spec.view || 'iso';
+  let label;
+  if (name === 'pov') {
+    sbMesh(player.pos.x, player.pos.z);
+    camera.position.set(player.pos.x, player.pos.y + 1.62, player.pos.z); camera.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
+    label = `player view from ${fmtP(player.pos)} looking ${compass(facing(player))}${player.riding ? `, riding ${player.riding.name}` : ''}`;
+  } else {
+    const [x0, y0, z0, x1, y1, z1] = sbBox(spec), c = { x: (x0 + x1) / 2, y: (y0 + y1) / 2, z: (z0 + z1) / 2 };
+    const size = Math.max(x1 - x0, y1 - y0, z1 - z0, 3), d = clamp(+spec.distance || size * 1.1 + 5, 2, 220);
+    const [deg, el] = VIEWS[name] || (Number.isFinite(+spec.angle) ? [+spec.angle, 0.4] : VIEWS.iso);
+    const a = SB.site.yaw + Math.PI + (deg * Math.PI) / 180, dir = { x: Math.sin(a), z: Math.cos(a) }; // horizontal view direction
+    camera.position.set(c.x - dir.x * d * Math.cos(el), c.y + d * Math.sin(el), c.z - dir.z * d * Math.cos(el));
+    if (name === 'low') camera.position.y = Math.max(camera.position.y, y0 + 1.7);
+    camera.lookAt(c.x, c.y, c.z);
+    sbMesh(c.x, c.z); if (Math.hypot(camera.position.x - c.x, camera.position.z - c.z) > 40) sbMesh(camera.position.x, camera.position.z);
+    label = `${name} view of ${spec.entity ?? (spec.box || spec.at ? 'area' : 'the draft')} (${Math.round(x1 - x0)}×${Math.round(y1 - y0)}×${Math.round(z1 - z0)}), camera looking ${compass(dir)}`;
+  }
+  camera.updateMatrixWorld();
+  const fog = [scene.fog.near, scene.fog.far, chunkUniforms.fogNear.value, chunkUniforms.fogFar.value], hidden = selBox.visible;
+  scene.fog.near = chunkUniforms.fogNear.value = 400; scene.fog.far = chunkUniforms.fogFar.value = 900; selBox.visible = name === 'pov' && hidden;
+  updateAmbience(-1);
+  renderer.render(scene, camera);
+  const src = renderer.domElement, cv = document.createElement('canvas'); cv.width = src.width; cv.height = src.height;
+  const g = cv.getContext('2d'); g.drawImage(src, 0, 0);
+  if (name === 'pov') { g.strokeStyle = 'rgba(255,255,255,.8)'; g.lineWidth = 2; const mx = cv.width / 2, my = cv.height / 2; g.beginPath(); g.moveTo(mx - 9, my); g.lineTo(mx + 9, my); g.moveTo(mx, my - 9); g.lineTo(mx, my + 9); g.stroke(); }
+  g.font = '600 14px monospace'; const tw = g.measureText(label).width; g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(6, 6, tw + 12, 22); g.fillStyle = '#fff'; g.fillText(label, 12, 22);
+  [scene.fog.near, scene.fog.far, chunkUniforms.fogNear.value, chunkUniforms.fogFar.value] = fog; selBox.visible = hidden;
+  return { label, image: cv.toDataURL('image/jpeg', +spec.quality || 0.8) };
+}
+const deg = (r) => Math.round((r * 180) / Math.PI);
+function sbDesc(e) {
+  const r = rideOf(e), on = Object.keys(e.def.on || {});
+  return { id: e.id, name: e.name, type: e.type, pos: P3(e.pos), facing: compass(facing(e)), hp: `${Math.ceil(e.hp)}/${e.maxHp}`, team: e.team, brain: e.brain.move,
+    size_blocks: { hitbox: [r2(e.w), r2(e.h)], model_height: r2((e.modelTop || 0) * e.curScale()), model_reach: r2((e.modelExt || 0) * e.curScale()) }, scale: r2(e.curScale()),
+    ...(r ? { ride: { fly: !!(r.fly ?? e.flying), speed: r.speed ?? null, seat: r.seat ?? 'on top', rider: e.rider && rideActive(e) ? e.rider.who.name : null } } : {}),
+    ...(on.length ? { events: on } : {}), ...(e.state ? { state: e.state } : {}), distance: r2(dist3(e.pos, player.pos)) };
+}
+function sbMe() { return { pos: P3(player.pos), look: { yaw: deg(look.yaw), pitch: deg(look.pitch), facing: compass(facing(player)) }, hp: `${Math.ceil(player.hp)}/${player.maxHp}`, mode: gameMode, riding: player.riding ? player.riding.name : null, looking_at: lookEnt ? `${lookEnt.name} (creature #${lookEnt.id})` : lookBlk ? `${BLOCKS[lookBlk.id].key} block at ${lookBlk.x},${lookBlk.y},${lookBlk.z}` : 'nothing within reach', holding: inv[sel] ? `${inv[sel].kind} ${inv[sel].key}` : 'empty hand' }; }
+function sbApply(actions, { seconds = 2 } = {}) { // run a draft the way the Creator's reply runs: from the site, as the requesting player
+  const defs0 = new Map(Object.entries(DEFS).map(([k, v]) => [k, new Map(Object.entries(v).map(([kk, d]) => [kk, JSON.stringify(d)]))]));
+  const ents0 = new Set(entities.map((e) => e.id)), chat0 = SB.chat.length, warns = [];
+  const back = { pos: { ...player.pos }, yaw: look.yaw, pitch: look.pitch };
+  SB.edits = new Set(); warned.clear();
+  sbPose(SB.site); warnSink = warns;
+  try { runActions(arr(actions), { ...useCtx(), vars: {}, byPlayer: true }); } catch (err) { warns.push(String(err.message || err)); } finally { warnSink = null; }
+  for (let i = 0; i < 60 && (buildJobs.length || running.some((c) => c.wake - nowS() < 1)); i++) sbStep(0.25);
+  sbStep(seconds);
+  const keys = [...SB.edits].map((k) => k.split(',').map(Number)); SB.edits = null;
+  let box = null;
+  if (keys.length) { box = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]; for (const [x, y, z] of keys) { box[0] = Math.min(box[0], x); box[1] = Math.min(box[1], y); box[2] = Math.min(box[2], z); box[3] = Math.max(box[3], x + 1); box[4] = Math.max(box[4], y + 1); box[5] = Math.max(box[5], z + 1); } }
+  const born = entities.filter((e) => !ents0.has(e.id) && !e.dead && !e.def.isProjectile);
+  for (const e of born.slice(0, 20)) { const b = sbEntBox(e); box = box ? [Math.min(box[0], b[0]), Math.min(box[1], b[1]), Math.min(box[2], b[2]), Math.max(box[3], b[3]), Math.max(box[4], b[4]), Math.max(box[5], b[5])] : b; }
+  if (box) SB.box = box.map((v) => Math.round(v * 10) / 10);
+  const defs = [];
+  for (const [kind, m] of Object.entries(DEFS)) for (const [k, d] of Object.entries(m)) { const old = defs0.get(kind)?.get(k); if (old !== JSON.stringify(d)) defs.push(`${old ? 'changed' : 'new'} ${kind} "${k}"${d.name ? ` (${d.name})` : ''}`); }
+  sbPose(back);
+  return { blocks_changed: keys.length, box: box ? SB.box : null, size_blocks: box ? [r2(box[3] - box[0]), r2(box[4] - box[1]), r2(box[5] - box[2])] : null,
+    definitions: defs.slice(0, 40), new_creatures: born.slice(0, 20).map(sbDesc), messages: SB.chat.slice(chat0).slice(-30), warnings: [...new Set(warns)].slice(0, 30), running_scripts: running.length };
+}
+const SB_KEYS = { forward: 'forward', back: 'back', backward: 'back', left: 'left', right: 'right', jump: 'jump', up: 'jump', sneak: 'sprint', sprint: 'sprint', down: 'sprint', shift: 'sprint', fly: 'fly' };
+function sbLookAt(p) { const e = player.eye(), dx = p.x - e.x, dy = p.y - e.y, dz = p.z - e.z; look.yaw = Math.atan2(-dx, -dz); look.pitch = clamp(Math.atan2(dy, Math.hypot(dx, dz)), -1.55, 1.55); player.yaw = look.yaw + Math.PI; player.pitch = look.pitch; }
+function sbTarget(st) { // where a step points: a creature, a position, or explicit angles
+  if (st.entity != null) { const e = sbFind(st.entity); if (!e) throw new Error(`no creature "${st.entity}" here`); return { e, p: e.center() }; }
+  if (arr(st.at).length === 3) { const [x, y, z] = st.at.map(Number); return { p: { x, y, z } }; }
+  return null;
+}
+function sbHold(keyList, seconds, out) { // hold keys for a while, sampling where things went
+  const codes = arr(keyList).map((k) => KB[SB_KEYS[String(k).toLowerCase()] || k]).filter(Boolean);
+  for (const c of codes) keys[c] = true;
+  const T = Math.min(clamp(+seconds || 1, 0.1, 30), SB.budget ?? 30), path = [], hp0 = player.hp; SB.budget = (SB.budget ?? 30) - T;
+  if (T <= 0) { out.problem = 'skipped: one play call simulates at most 60 seconds'; return; } let maxV = 0, t = 0, prev = { ...player.pos };
+  try {
+    while (t < T - 1e-6) {
+      const d = Math.min(0.5, T - t); sbStep(d); t += d;
+      const v = dist3(player.pos, prev) / d; maxV = Math.max(maxV, v); prev = { ...player.pos };
+      path.push([r2(t), Math.round(player.pos.x), Math.round(player.pos.y), Math.round(player.pos.z)]);
+    }
+  } finally { for (const c of codes) keys[c] = false; }
+  out.path = path.length > 12 ? path.filter((_, i) => i % Math.ceil(path.length / 12) === 0 || i === path.length - 1) : path;
+  out.top_speed = r2(maxV);
+  if (maxV > MAX_V - 5) out.problem = `hit the game's speed cap (${MAX_V} blocks/s): something is pushing it far too hard`;
+  if (player.pos.y > WH + 30) out.problem = `ended up ${Math.round(player.pos.y)} blocks high (above the world)`;
+  if (player.hp < hp0) out.hurt = r2(hp0 - player.hp);
+}
+function sbDo(st, shots) {
+  const out = {};
+  switch (st.do) {
+    case 'goto': {
+      if (st.entity != null) { const e = sbFind(st.entity); if (!e) throw new Error(`no creature "${st.entity}" here`); const r = e.w / 2 + 2.5, f = facing(e); player.pos.x = e.pos.x + f.x * r; player.pos.z = e.pos.z + f.z * r; player.pos.y = e.pos.y + 0.1; sbMesh(player.pos.x, player.pos.z); while (collides(player.pos.x, player.pos.y, player.pos.z, player.w, player.h) && player.pos.y < WH) player.pos.y += 1; sbLookAt(e.center()); }
+      else if (st.at === 'site' || st.at == null) sbPose(SB.site);
+      else { const [x, y, z] = arr(st.at).map(Number); Object.assign(player.pos, { x, y, z }); sbMesh(x, z); }
+      if (player.riding) dismount();
+      player.vel = { x: 0, y: 0, z: 0 }; sbStep(0.3); updateTargeting(); break;
+    }
+    case 'look': {
+      const tg = sbTarget(st);
+      if (tg) sbLookAt(tg.p); else { if (st.yaw != null) look.yaw = (+st.yaw * Math.PI) / 180; if (st.pitch != null) look.pitch = clamp((+st.pitch * Math.PI) / 180, -1.55, 1.55); player.yaw = look.yaw + Math.PI; player.pitch = look.pitch; }
+      sbStep(0.05); updateTargeting(); break;
+    }
+    case 'click': case 'right_click': case 'left_click': case 'use': case 'attack': case 'ride': case 'interact': {
+      if (st.do === 'ride' || st.do === 'interact') { const e = sbFind(st.entity); if (!e) throw new Error(`no creature "${st.entity}" here`); if (dist3(e.center(), player.eye()) > 4 + e.w / 2) sbDo({ do: 'goto', entity: e.id }, shots); sbLookAt(e.center()); }
+      else { const tg = sbTarget(st); if (tg) sbLookAt(tg.p); }
+      const right = st.do === 'right_click' || st.do === 'use' || st.do === 'ride' || st.do === 'interact' || st.button === 'right';
+      const want = st.entity != null ? sbFind(st.entity) : null;
+      for (let i = 0; i < clamp(+st.times || 1, 1, 20); i++) {
+        updateTargeting();
+        if (want && lookEnt !== want) { out.note = `${lookEnt ? lookEnt.name : 'nothing'} was in the crosshair instead of ${want.name}; clicked ${want.name} directly`; lookEnt = want; lookBlk = null; }
+        out.target = sbMe().looking_at; if (right) secondaryAction(); else { atkCool = 0; primaryAction(); } sbStep(0.3);
+      }
+      if (st.do === 'ride' && !player.riding) out.problem = `could not mount ${st.entity}: it has no "ride" field (or someone else is riding it)`;
+      break;
+    }
+    case 'hold': case 'keys': case 'walk': {
+      if (st.yaw != null || st.pitch != null) sbDo({ do: 'look', yaw: st.yaw ?? deg(look.yaw), pitch: st.pitch ?? deg(look.pitch) }, shots);
+      sbHold(st.keys ?? (st.do === 'walk' ? ['forward'] : []), st.seconds, out); updateTargeting(); break;
+    }
+    case 'wait': sbHold([], st.seconds, out); updateTargeting(); break;
+    case 'select': case 'hold_item': {
+      const k = normKey(st.item ?? st.block ?? st.key), kind = DEFS.item[k] ? 'item' : BLOCK_ID[k] != null ? 'block' : DEFS.entity[k] ? 'egg' : null;
+      if (!kind) throw new Error(`no item, block or creature "${k}"`);
+      let i = inv.findIndex((s, j) => j < 9 && s?.kind === kind && s.key === k);
+      if (i < 0) { i = inv.findIndex((s, j) => j < 9 && !s); if (i < 0) i = sel; inv[i] = { kind, key: k, n: kind === 'item' ? 1 : 64 }; invChanged(); }
+      sel = i; renderHotbar(); out.holding = `${kind} ${k}`; break;
+    }
+    case 'command': command(String(st.text || st.command || '')); sbStep(0.5); break;
+    case 'mode': gameMode = st.mode === 'survival' ? 'survival' : 'creative'; if (gameMode === 'survival') playerFly = false; break;
+    case 'dismount': if (player.riding) dismount(); sbStep(0.3); break;
+    case 'view': case 'shot': { const v = sbView({ view: 'pov', ...st }); shots.push(v); out.image = shots.length; break; }
+    default: throw new Error(`unknown step "${st.do}"`);
+  }
+  return out;
+}
+function sbPlay(steps) {
+  const log = [], shots = []; SB.budget = 60;
+  for (const st of arr(steps).slice(0, 40)) {
+    const chat0 = SB.chat.length; let r;
+    try { r = sbDo(st || {}, shots); } catch (err) { r = { error: String(err.message || err) }; }
+    log.push({ step: st, ...r, player: sbMe(), ...(SB.chat.length > chat0 ? { messages: SB.chat.slice(chat0).slice(-12) } : {}) });
+  }
+  return { log, shots };
+}
+function sbContext() { const back = { pos: { ...player.pos }, yaw: look.yaw, pitch: look.pitch }; sbPose(SB.site); try { return creatorContext(null); } finally { sbPose(back); } }
+function sbState() {
+  return { site: { pos: P3(SB.site.pos), facing: compass({ x: -Math.sin(SB.site.yaw), z: -Math.cos(SB.site.yaw) }) }, player: sbMe(), draft_box: SB.box,
+    creatures: entities.filter((e) => !e.dead && !e.def.isProjectile && dist3(e.pos, player.pos) < 64).sort((a, b) => dist3(a.pos, player.pos) - dist3(b.pos, player.pos)).slice(0, 25).map(sbDesc),
+    recent_messages: SB.chat.slice(-15), running_scripts: running.length };
+}
 function spawnStarters() {
   const sp = findSpawn();
   for (let i = 0; i < 4; i++) entities.push(new Entity('pig', { x: sp.x + rnd(-8, 8), y: sp.y + 3, z: sp.z + rnd(-8, 8) }));
@@ -4110,12 +4442,13 @@ function newWorld() {
   setTimeout(() => chatLine(`👋 Welcome! New here? <b>Esc → How to Play</b> (or <b>${esc(keyName(KB.howto))}</b>). <b>${esc(keyName(KB.create))}</b> asks <b>@Creator</b> to make anything, and <b>Ada</b>, an AI architect, lives nearby: <b>@Ada build me a lighthouse</b>.`, 'sys'), 800);
 }
 let welcome = null;
-for (let i = 0; i < 5 && !welcome; i++) { // a server restart takes a few seconds: keep trying before giving up on the shared world
+if (SANDBOX) { noSave = true; ai.password = ''; $('#menu').style.display = 'none'; SB.snap = await new Promise((r) => (window.__sbLoad = r)); startSandbox(SB.snap); }
+else for (let i = 0; i < 5 && !welcome; i++) { // a server restart takes a few seconds: keep trying before giving up on the shared world
   if (i) { $('#netmsg').textContent = `Connecting to the shared world… (try ${i + 1})`; await sleep(2500); }
   welcome = await connect();
 }
 if (welcome) startOnline(welcome);
-else {
+else if (!SANDBOX) {
   if (!load()) newWorld();
   $('#netmsg').textContent = 'PromptCraft · OFFLINE: your own world in this browser';
   setTimeout(() => sysMsg("⚠ Couldn't reach the shared world, so this is your offline world (saved in this browser). It switches back by itself as soon as the server answers.", 'err'), 900);
@@ -4149,13 +4482,14 @@ function tick(dt) {
   updateEntity(player, dt, t);
   for (let i = entities.length - 1; i >= 0; i--) { const e = entities[i]; if (!e || e.dead) continue; if (e.puppet) updatePuppet(e, dt, t); else if (e.proj) updateProjectile(e, dt); else updateEntity(e, dt, t); }
   for (const r of net.players.values()) updatePuppet(r, dt, t);
-  if (isHost()) { tickVM(); updateBuilds(dt); tickBlocks(t); tickRules(t); tickRegions(t); tickSpawns(t); }
-  tickAgents(t); tickExplore(t); updateAmbience(dt);
+  if (player.riding) seatRider();
+  if (isHost()) { tickVM(); updateBuilds(dt); tickBlocks(t); tickRules(t); tickRegions(t); if (!SANDBOX) tickSpawns(t); }
+  if (!SANDBOX) { tickAgents(t); tickExplore(t); } updateAmbience(dt);
   if (net.online) netTick(t);
   updateParticles(dt); updateFloaters(dt); updateBeams(dt);
   if (playing) {
     updateTargeting();
-    if ((mouseHeld[0] || mouseHeld[2]) && t > nextRepeat) { nextRepeat = t + 0.22; if (mouseHeld[0]) primaryAction(); else secondaryAction(); }
+    if ((mouseHeld[0] || mouseHeld[2]) && t > nextRepeat) { nextRepeat = t + 0.22; if (mouseHeld[0]) primaryAction(); else if (!player.riding) secondaryAction(); }
   }
   tickMining(dt); tickHunger(dt); tickFurnaces(dt);
   if ((hudT -= dt) <= 0) {
@@ -4166,10 +4500,11 @@ function tick(dt) {
     $('#coords').textContent = `${fmtP(player.pos)}  ${compass(facing(player))}  🌍 ${here?.status === 'ready' ? here.name : here?.status === 'pending' ? 'generating…' : 'overworld'}  ${entities.length} creatures${globals._minds ? '  · 🧠 minds on' : ''}${playerFly ? '  · flying' : ''}${creative() ? '  · creative' : ''}${net.online && net.isHost ? '  · host' : ''}`;
   }
 }
-requestAnimationFrame(frame);
+if (!SANDBOX) requestAnimationFrame(frame);
+if (SANDBOX) { window.sandbox = { apply: sbApply, view: sbView, play: sbPlay, state: sbState, step: sbStep, context: sbContext }; sbBoot(SB.snap); }
 
 // handy for debugging from the console: game.run([{do:'say',text:'hi'}])
-window.game = { net, regions, globals, inv, biomeAt, look, ui: { openInventory, closeInventory, openPrompt, command }, step: (n = 60, dt = 1 / 60) => { for (let i = 0; i < n; i++) tick(dt); renderer.render(scene, camera); }, getBlock, buildJobs, undoStack, tracked, reset: () => { noSave = true; localStorage.removeItem(SAVE_KEY); location.reload(); }, run: (a, self) => runActions(a, { self: self || player, pos: useCtx().pos, vars: {} }), define: registerDef, DEFS, entities, get player() { return player; }, askAI, spawn: spawnEntity, BLOCKS, setBlock, select, evalExpr, save: saveNow, VERBS };
+window.game = { net, regions, globals, inv, biomeAt, look, ui: { openInventory, closeInventory, openPrompt, command }, step: (n = 60, dt = 1 / 60) => { for (let i = 0; i < n; i++) tick(dt); renderer.render(scene, camera); }, getBlock, buildJobs, undoStack, tracked, reset: () => { noSave = true; localStorage.removeItem(SAVE_KEY); location.reload(); }, run: (a, self) => runActions(a, { self: self || player, pos: useCtx().pos, vars: {} }), define: registerDef, DEFS, entities, get player() { return player; }, get lookEnt() { return lookEnt; }, updateTargeting, askAI, spawn: spawnEntity, BLOCKS, setBlock, select, evalExpr, save: saveNow, VERBS };
 </script>
 </body>
 </html>

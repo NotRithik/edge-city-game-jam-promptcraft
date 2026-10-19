@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
 import { WebSocketServer } from 'ws';
+import { makeSandboxes } from './sandbox.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(ROOT, '.env')); } catch {}
@@ -104,13 +105,14 @@ function recordUsage(role, model, cost, inTok, outTok, extra) {
   console.log(`[ai] ${role} ${model} ${extra} in=${inTok} out=${outTok} cost=$${cost.toFixed(4)} total=$${usage.spentUsd.toFixed(3)}`);
 }
 
-// Gemini (Interactions API). JSON mode instead of tools: one request, one JSON plan back.
-async function callGemini(role, prompt, context) {
+// Gemini (Interactions API). JSON mode instead of tools: one request, one JSON plan back. images = base64 JPEGs (sandbox previews).
+async function callGemini(role, prompt, context, images = []) {
   const model = role === 'agent' ? AGENT_MODEL : MODEL;
+  const text = userText(role, prompt, context);
   const it = await gemini.interactions.create({
     model,
     system_instruction: SYSTEM_PROMPT,
-    input: userText(role, prompt, context),
+    input: images.length ? [{ type: 'text', text }, ...images.map((data) => ({ type: 'image', data, mime_type: 'image/jpeg' }))] : text,
     generation_config: { thinking_level: role === 'agent' ? AGENT_EFFORT : EFFORT, max_output_tokens: MAX_TOKENS },
     response_format: { type: 'text', mime_type: 'application/json' },
     store: false,
@@ -127,13 +129,15 @@ async function callGemini(role, prompt, context) {
   let out;
   try { out = JSON.parse(raw); } catch { return { message: 'The AI sent back broken JSON. Try again.', actions: [], cost }; }
   if (Array.isArray(out)) out = { message: '', actions: out };
+  if (out?.ok === true && !out.actions?.length) return { ok: true, message: String(out.message || ''), actions: [], cost }; // a review that found nothing to fix
   if (!out || !Array.isArray(out.actions)) return { message: String(out?.message || 'The AI made no changes.'), actions: [], cost };
   return { message: String(out.message || ''), actions: out.actions, note: out.note ? String(out.note) : '', cost };
 }
 
-async function callClaude(role, prompt, context) {
+async function callClaude(role, prompt, context, images = []) {
   const model = role === 'agent' ? AGENT_MODEL : MODEL;
-  const user = userText(role, prompt, context);
+  const ut = userText(role, prompt, context);
+  const user = images.length ? [{ type: 'text', text: ut }, ...images.map((data) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }))] : ut;
   const params = {
     model,
     max_tokens: MAX_TOKENS,
@@ -280,17 +284,22 @@ async function handleAI(req, res) {
   const role = ['agent', 'region'].includes(body.role) ? body.role : 'creator';
   const prompt = String(body.prompt || '').slice(0, 2000);
   if (!prompt.trim()) return send(res, 400, { error: role === 'agent' ? 'Agents only act when someone talks to them.' : 'Empty prompt' });
-  const r = await aiCall(role, prompt, String(body.context || ''));
-  logActivity(String(body.player || '?').slice(0, 30), 'ai_call', { role, prompt: prompt.slice(0, 400), ok: r.code === 200, error: r.error, message: r.out?.message?.slice(0, 300),
+  const context = String(body.context || '');
+  const r = await aiCall(role, prompt, context);
+  const site = cleanSite(body.site);
+  if (r.code === 200 && role === 'creator' && site && REVIEW_ROUNDS > 0 && needsReview(r.out.actions)) {
+    try { r.out = await reviewDraft({ prompt, context, out: r.out, site }); } catch (e) { console.warn('[review] skipped:', e.message); }
+  }
+  logActivity(String(body.player || '?').slice(0, 30), 'ai_call', { role, prompt: prompt.slice(0, 400), ok: r.code === 200, error: r.error, message: r.out?.message?.slice(0, 300), reviewed: r.out?.review,
     defined: (r.out?.actions || []).filter((a) => a?.do === 'define').map((a) => `${a.kind}:${a.key}`).slice(0, 20) });
   send(res, r.code, r.code === 200 ? { ...r.out, ...status() } : { error: r.error, ...status() });
 }
 // One budgeted AI call (used by the page's /api/ai and by outside agents' "create"). Returns { code, out | error }.
-async function aiCall(role, prompt, context) {
+async function aiCall(role, prompt, context, images = []) {
   context = context.slice(0, 24000);
   if (inFlight >= MAX_CONCURRENT) return { code: 429, error: 'The AI is busy — try again in a moment.' };
   const model = role === 'agent' ? AGENT_MODEL : MODEL;
-  const worst = MOCK ? 0 : worstCase(model, SYSTEM_PROMPT.length + context.length + prompt.length);
+  const worst = MOCK ? 0 : worstCase(model, SYSTEM_PROMPT.length + context.length + prompt.length + images.length * 6000);
   if (usage.spentUsd + reservedUsd + worst > BUDGET_USD) {
     const error = usage.spentUsd >= BUDGET_USD - 0.01 ? `AI budget used up ($${usage.spentUsd.toFixed(2)} of $${BUDGET_USD}).`
       : `Not enough AI budget left for another request ($${usage.spentUsd.toFixed(2)} of $${BUDGET_USD} used; one request can cost up to $${worst.toFixed(2)}).`;
@@ -300,8 +309,8 @@ async function aiCall(role, prompt, context) {
   const t0 = Date.now();
   console.log(`[ai] ${role} request${prompt ? `: "${prompt.slice(0, 80)}"` : ''} (in flight: ${inFlight})`);
   try {
-    const out = MOCK ? mockReply(prompt, role) : PROVIDER === 'gemini' ? await callGemini(role, prompt, context) : await callClaude(role, prompt, context);
-    fs.appendFile(path.join(ROOT, 'data', 'ai-log.jsonl'), JSON.stringify({ t: new Date().toISOString(), secs: (Date.now() - t0) / 1000, role, prompt, ...out }) + '\n', () => {});
+    const out = MOCK ? (images.length ? { ok: true, message: '', actions: [], cost: 0 } : mockReply(prompt, role)) : PROVIDER === 'gemini' ? await callGemini(role, prompt, context, images) : await callClaude(role, prompt, context, images);
+    fs.appendFile(path.join(ROOT, 'data', 'ai-log.jsonl'), JSON.stringify({ t: new Date().toISOString(), secs: (Date.now() - t0) / 1000, role, prompt, images: images.length || undefined, ...out }) + '\n', () => {});
     return { code: 200, out };
   } catch (e) {
     console.error('[ai] error', e?.status || '', e?.message);
@@ -317,6 +326,72 @@ async function aiCall(role, prompt, context) {
     if (e instanceof Anthropic.APIError) return { code: 502, error: `Claude API error ${e.status}: ${e.message}` };
     return { code: 500, error: String(e?.message || e) };
   } finally { inFlight--; reservedUsd -= worst; }
+}
+
+// ============================================================================ sandboxes + the Creator's self-review
+// A sandbox is a private copy of the world around a "site" (where the asker stands and which way they face), rendered by
+// headless Chrome (sandbox.js). The Creator previews its own drafts there: it looks at them, rides and right-clicks what it
+// made, and fixes what's wrong before anything reaches the real world. Outside agents get the same thing as the "sandbox" tool.
+const sandboxes = makeSandboxes({ baseUrl: `http://127.0.0.1:${PORT}`, max: Number(process.env.SANDBOX_MAX || 3) });
+const REVIEW_ROUNDS = Math.max(0, Math.min(3, Number(process.env.CREATOR_REVIEW ?? 1))); // 0 turns the Creator's self-review off
+function cleanSite(v) {
+  const p = v?.pos; if (!p || ![p.x, p.y, p.z].every(Number.isFinite)) return null;
+  return { pos: { x: +p.x, y: Math.max(-10, Math.min(200, +p.y)), z: +p.z }, yaw: Number.isFinite(+v.yaw) ? +v.yaw : 0, pitch: Number.isFinite(+v.pitch) ? Math.max(-1.55, Math.min(1.55, +v.pitch)) : 0 };
+}
+function sandboxSnap(site, time) { // the world near the site (block edits within ~150 blocks, creatures within 80)
+  const cx = Math.floor(site.pos.x / 16), cz = Math.floor(site.pos.z / 16), edits = {};
+  for (const [k, v] of Object.entries(world.edits)) { const [x, z] = k.split(',').map(Number); if (Math.abs(x - cx) <= 9 && Math.abs(z - cz) <= 9) edits[k] = v; }
+  const near = (p) => p && Math.hypot(p.x - site.pos.x, p.z - site.pos.z) < 80;
+  return { seed: world.seed, defs: world.defs, edits, regions: world.regions, globals: world.globals, sky: world.sky, entities: (world.entities || []).filter((e) => near(e.pos)).slice(0, 120), site, time, rd: 6 };
+}
+const jpeg = (dataUrl) => String(dataUrl).replace(/^data:image\/jpeg;base64,/, '');
+function needsReview(actions) { // creatures (riding, scale, behaviour) and builds are where previews pay off
+  return sandboxes.available() && Array.isArray(actions) && actions.some((a) => a && (a.do === 'build' || (a.do === 'define' && ['entity', 'entities', 'creature', 'mob'].includes(a.kind))));
+}
+// Play-test what a draft made: ride rideable creatures, right-click interactive ones. -> { tests, images }
+async function autoTest(s, report) {
+  const tests = [], images = [];
+  for (const c of (report.new_creatures || []).filter((c) => c.ride || c.events?.includes('interact')).slice(0, 2)) {
+    const steps = c.ride
+      ? [{ do: 'ride', entity: c.id }, { do: 'hold', keys: c.ride.fly ? ['forward', 'jump'] : ['forward'], pitch: c.ride.fly ? 15 : 0, seconds: 3 }, { do: 'view', view: 'pov' }, { do: 'dismount' }]
+      : [{ do: 'interact', entity: c.id }, { do: 'wait', seconds: 2 }, { do: 'view', view: 'pov' }];
+    const t = await sandboxes.play(s, steps);
+    tests.push({ creature: `${c.name} (#${c.id})`, did: c.ride ? 'rode it: held forward 3 s' : 'right-clicked it, waited 2 s', log: t.log.map(({ step, player, ...r }) => ({ do: step.do, ...r, player_pos: player.pos, riding: player.riding })), ...(t.console ? { console: t.console } : {}) });
+    images.push(...t.shots.map((x) => x.image));
+  }
+  return { tests, images };
+}
+function reviewPrompt(prompt, out, report, tests, round) {
+  return `REVIEW YOUR DRAFT (round ${round}). The player asked: "${prompt}".
+Your draft (below) was run in a private PREVIEW copy of the world: nothing is real yet. Images: 1) "front" = what the player sees from where they stand, 2) iso view, then views from play-tests (first-person while riding / after right-clicking).
+Check it like a demanding player would:
+- Does it look like what was asked? Right shape, colours and REAL-WORLD SCALE (1 block = 1 metre: a door 2 tall, a house 6-10, a Boeing 737 is ~38 long with a 36 wingspan, Godzilla ~50-100 tall).
+- Is it placed sensibly (not buried, not floating, not on top of the player, not blocking the view)? Do not teleport or move the player to fix a view problem: move the creation instead.
+- Do the interactions work? Riding should use the built-in "ride" field (never teleport/push loops), nothing should fly off, error or spam.
+- Warnings or errors in the report?
+If it is all good, reply exactly {"ok": true}. Otherwise reply with the COMPLETE corrected plan {"message": "...", "actions": [...]} — it REPLACES the draft entirely (keep what was right; you can't patch).
+
+<draft>${JSON.stringify({ message: out.message, actions: out.actions }).slice(0, 60000)}</draft>
+<preview_report>${JSON.stringify(report).slice(0, 8000)}</preview_report>
+<play_tests>${JSON.stringify(tests).slice(0, 8000)}</play_tests>`;
+}
+async function reviewDraft({ prompt, context, out, site }) {
+  const key = 'review:' + crypto.randomBytes(4).toString('hex'), t0 = Date.now();
+  const s = await sandboxes.open(key, sandboxSnap(site));
+  let cur = out, rounds = 0, revised = 0;
+  try {
+    for (; rounds < REVIEW_ROUNDS; rounds++) {
+      const report = await sandboxes.apply(s, cur.actions);
+      const views = await sandboxes.view(s, [{ view: 'front' }, { view: 'iso' }]);
+      const { tests, images } = await autoTest(s, report);
+      const r = await aiCall('creator', reviewPrompt(prompt, cur, report, tests, rounds + 1), context, [...views.map((v) => v.image), ...images].slice(0, 6).map(jpeg));
+      if (r.code !== 200 || r.out.ok || !r.out.actions?.length) { rounds++; break; }
+      cur = { ...r.out, cost: (cur.cost || 0) + (r.out.cost || 0) }; revised++;
+      if (rounds + 1 < REVIEW_ROUNDS) await sandboxes.reset(s);
+    }
+  } finally { sandboxes.close(key); }
+  console.log(`[review] "${prompt.slice(0, 50)}" ${rounds} round(s), ${revised} revision(s), ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  return { ...cur, review: { rounds, revised } };
 }
 
 // ============================================================================ multiplayer + currency
@@ -479,7 +554,7 @@ function handleMsg(me, m, raw) {
     return;
   }
   switch (m.t) {
-    case 'p': me.pos = { x: m.x, y: m.y, z: m.z }; broadcast({ t: 'p', id: me.id, x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, hp: m.hp }, me.ws); break;
+    case 'p': me.pos = { x: m.x, y: m.y, z: m.z }; me.yaw = m.yaw; me.pitch = m.pitch; broadcast({ t: 'p', id: me.id, x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, hp: m.hp }, me.ws); break;
     case 'away': me.away = !!m.v; if ((isHost && me.away) || (!isHost && !me.away && clients.get(hostWs)?.away)) electHost(); break;
     case 'edits': if (Array.isArray(m.l)) { for (const e of m.l.slice(0, 50000)) applyEdit(e); broadcast(raw, me.ws); saveWorldSoon(); } break;
     case 'def': if (KINDS.has(m.kind) && m.def && typeof m.def.key === 'string') { (world.defs[m.kind] ||= {})[m.def.key] = m.def; broadcast({ t: 'def', kind: m.kind, def: m.def, by: me.name }, me.ws); saveWorldSoon(); } break;
@@ -500,7 +575,7 @@ function handleMsg(me, m, raw) {
     case 'sky': if (isHost) { world.sky = m.sky; broadcast(raw, me.ws); saveWorldSoon(); } break;
     case 'pfx': if (isHost) for (const c of clients.values()) if (c.id === m.to) sendTo(c.ws, raw); break;
     // anyone -> host (the host runs all game logic)
-    case 'run': case 'use': case 'hit': case 'interact': case 'blockev': case 'spawn': case 'agentnote': case 'cmd':
+    case 'run': case 'use': case 'hit': case 'interact': case 'blockev': case 'spawn': case 'ride': case 'agentnote': case 'cmd':
       if (hostWs && !isHost) sendTo(hostWs, { ...m, from: me.id }); break;
     // currency
     case 'pay': { const r = transfer(me.id, m.to, m.amount, m.memo); sendTo(me.ws, { t: 'ledger', rid: m.rid, ok: r.ok, msg: r.msg }); break; }
@@ -636,7 +711,7 @@ function deliverMentions(line) {
 const chatText = (l) => `${l.name}${l.kind === 'prompt' ? ' (asked the AI)' : l.kind === 'ai' ? ' (AI reply)' : l.kind === 'agent' ? ' [agent]' : ''}: ${l.text}`;
 const openVotes = () => gov.proposals.map((p) => ({ id: p.id, law: p.law, value: p.value, reason: p.reason, by: p.by, yes: Object.values(p.votes).filter(Boolean).length, no: Object.values(p.votes).filter((v) => !v).length, closes_in_s: Math.max(0, Math.round((p.closes - Date.now()) / 1000)) }));
 const readyRegions = () => Object.entries(world.regions).filter(([, r]) => r.status === 'ready').map(([k, r]) => `${r.name} (region ${k}, biome ${r.biome})`);
-const MCP_PREFACE = `You play PromptCraft through the act tool. act {"action":"script","actions":[...]} runs the action lists described below as your avatar: "self" and "player" are your avatar, "look" is the spot your avatar faces, "pos" is just in front of it. Reply format notes below about an "act object" don't apply to you: just pass the actions array. Shops and other creatures charge your avatar's wallet when you interact with them.\n\n`;
+const MCP_PREFACE = `You play PromptCraft through the act and sandbox tools. Draft anything sizeable in the sandbox first (same actions as act script), look at it, play-test it, fix it, then commit. act {"action":"script","actions":[...]} runs the action lists described below as your avatar: "self" and "player" are your avatar, "look" is the spot your avatar faces, "pos" is just in front of it. Reply format notes below about an "act object" don't apply to you: just pass the actions array. Shops and other creatures charge your avatar's wallet when you interact with them.\n\n`;
 const MANUAL = (() => { const parts = SYSTEM_PROMPT.split(/\n(?=# )/), pick = (...h) => parts.filter((p) => h.some((x) => p.startsWith('# ' + x))).join('\n'); return { overview: parts[0] + '\n' + pick('World facts', 'Guidance'), actions: pick('Actions', 'Selectors', 'Positions', 'Directions', 'Expressions'), definitions: pick('Definitions'), build: pick('Build ops'), examples: pick('Interactions', 'Economy', 'Examples'), all: SYSTEM_PROMPT }; })();
 const obj = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const TOKEN = { type: 'string', minLength: 10, maxLength: 80, description: 'the avatar_token join_world gave you' };
@@ -648,6 +723,8 @@ const MCP_TOOLS = [
   { name: 'look', description: 'Read-only. What your avatar perceives now: where it is (region, biome, ground), nearby creatures, players and agents (with what you can do to them), what was said since your last look, your coins, laws, open votes and ideas for what to do next.', inputSchema: obj({ avatar_token: TOKEN }, ['avatar_token']) },
   { name: 'act', description: `Changes the world: one public game action per call that other people see. action = move (to: a player, creature or region name, "x,z" or "north 20"), say (text: public speech), interact (target: a creature name from look, e.g. a shop: may charge your coins), create (text: describe something and the world's Creator AI builds it near you; costs ${CREATE_COST} coins, appears in ~1 min), script (actions: PromptCraft action-language JSON run as your avatar; read the manual first), pay (to, amount, memo: game coins to a player or agent), vote (proposal, yes), propose (law, value, reason). Game coins only, no real money.`,
     inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['move', 'say', 'interact', 'create', 'script', 'pay', 'vote', 'propose'] }, to: { type: 'string', maxLength: 60 }, text: { type: 'string', maxLength: 400 }, target: { type: 'string', maxLength: 60 }, actions: { type: 'array', maxItems: 60, items: { type: 'object' } }, amount: { type: 'integer', minimum: 1, maximum: 100000 }, memo: { type: 'string', maxLength: 80 }, proposal: { type: 'integer', minimum: 1 }, yes: { type: 'boolean' }, law: { type: 'string', maxLength: 24 }, value: { type: ['string', 'number'] }, reason: { type: 'string', maxLength: 120 } }, ['avatar_token', 'action']) },
+  { name: 'sandbox', description: `Changes nothing until commit. Your private PREVIEW copy of the world around your avatar: build, look at it (you get images), play-test it like a player, fix it, and only then make it real. Use it for anything bigger than a few blocks and for every creature, vehicle or machine you make. Loop: open → apply (actions: same JSON as act script, run from the spot where you opened, facing the same way) → view (images from several sides) → play (walk, right-click, ride, attack, use items, commands; reports where things went and any problems) → fix with apply / undo / reset → view and play again until it looks and works right → commit (runs the whole draft in the real world at the same spot; free). action = open (optional site {x,y,z,facing: north|south|east|west}, time day|dusk|night), apply (actions), view (views: up to 4 of {view: front|back|left|right|iso|iso_back|top|low|pov, entity: name/id to frame, box: [x0,y0,z0,x1,y1,z1], at: [x,y,z], distance, time}; default front+iso of your draft), play (steps, max 40), state, undo (drops your last apply), reset (back to the untouched world), generate (text: the world's Creator AI drafts it into your sandbox for ${CREATE_COST} coins; you get its actions to edit), commit, close. Play steps: {"do":"goto","entity":"name"} or {"do":"goto","at":[x,y,z]} or {"do":"goto","at":"site"}; {"do":"look","entity"|"at"|"yaw","pitch"}; {"do":"right_click"} / {"do":"left_click"} (optional entity or at to aim first, times); {"do":"interact","entity"}; {"do":"ride","entity"} then {"do":"hold","keys":["forward","jump","sneak","left","right","back"],"seconds":3,"pitch":-10} to steer and {"do":"dismount"}; {"do":"select","item":"key"} (a block, item or creature egg in hand) then {"do":"use"}; {"do":"command","text":"/time night"}; {"do":"mode","mode":"survival"}; {"do":"wait","seconds":2}; {"do":"view","view":"pov"}.`,
+    inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['open', 'apply', 'view', 'play', 'state', 'undo', 'reset', 'generate', 'commit', 'close'] }, actions: { type: 'array', maxItems: 300, items: { type: 'object' } }, views: { type: 'array', maxItems: 4, items: { type: 'object' } }, steps: { type: 'array', maxItems: 40, items: { type: 'object' } }, text: { type: 'string', maxLength: 600 }, site: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' }, facing: { type: 'string' } } }, time: { type: 'string', enum: ['day', 'dusk', 'night'] } }, ['avatar_token', 'action']) },
 ];
 async function callTool(name, args) {
   args = args && typeof args === 'object' ? args : {};
@@ -684,6 +761,7 @@ async function callTool(name, args) {
       };
     }
     case 'act': return await agentAct(auth(), args);
+    case 'sandbox': return await sandboxTool(auth(), args);
     case 'listen': {
       const a = auth(), secs = Math.max(1, Math.min(20, Math.floor(+args.seconds || 20)));
       if (!agentInbox.get(a.id)?.length) await new Promise((res) => {
@@ -696,6 +774,57 @@ async function callTool(name, args) {
     }
   }
   throw new Error(`Unknown tool "${name}".`);
+}
+const FACING = { north: 0, south: Math.PI, east: -Math.PI / 2, west: Math.PI / 2 }; // look-space yaw (a player's camera)
+async function sandboxTool(a, x) {
+  const key = 'agent:' + a.id, ag = world.agents[a.id], who = { id: a.id, name: a.name }, now = Date.now();
+  const s = sandboxes.get(key), need = () => { if (!s) throw new Error('No sandbox open. Call sandbox {"action":"open"} first.'); return s; };
+  const pics = (views) => views.map((v) => ({ label: v.label, image: jpeg(v.image) }));
+  const actionsArg = () => { if (!Array.isArray(x.actions) || !x.actions.length) throw new Error('apply needs "actions" (the same JSON you would pass to act script).'); return x.actions.slice(0, 300); };
+  switch (x.action) {
+    case 'open': {
+      if (!sandboxes.available()) throw new Error('Sandboxes are not available on this server.');
+      if (now - (ag.sbOpen || 0) < 15e3) throw new Error('Wait a few seconds between opening sandboxes.');
+      ag.sbOpen = now;
+      let site = x.site && Number.isFinite(+x.site.x) ? cleanSite({ pos: { x: +x.site.x, y: +x.site.y, z: +x.site.z }, yaw: FACING[String(x.site.facing || '').toLowerCase().replace(/\s.*$/, '')] ?? 0 }) : null;
+      if (!site) { const r = await askHost('pose', { agent: who }); if (r.ok) site = cleanSite(r.data); }
+      if (!site) { const av = (world.entities || []).find((e) => e.vars?._agent === a.id); if (av) site = cleanSite({ pos: av.pos }); }
+      if (!site) throw new Error('Could not find your avatar (the world may be asleep). Pass site {"x":..,"y":..,"z":..,"facing":"north"}.');
+      const sb = await sandboxes.open(key, sandboxSnap(site, x.time), { site });
+      const v = await sandboxes.view(sb, [{ view: 'pov' }]), st = await sandboxes.state(sb);
+      logActivity(a.name, 'sandbox_open', { site: site.pos });
+      return { __images: pics(v), ok: true, msg: 'Sandbox open: a private copy of the world, standing where your avatar stands. Nothing you do here is real until commit. The image is your view from here.', state: st };
+    }
+    case 'apply': { const sb = need(); const r = await sandboxes.apply(sb, actionsArg()); const v = await sandboxes.view(sb, [{ view: r.box ? 'iso' : 'pov' }]); return { __images: pics(v), report: r, draft_applies: sb.draft.length, next: 'view it from other sides, play-test it, fix it, then commit' }; }
+    case 'view': { const sb = need(); const specs = (Array.isArray(x.views) && x.views.length ? x.views : [{ view: 'front' }, { view: 'iso' }]).slice(0, 4).map((v) => ({ ...v, ...(x.time && !v.time ? { time: x.time } : {}) })); return { __images: pics(await sandboxes.view(sb, specs)) }; }
+    case 'play': { const sb = need(); if (!Array.isArray(x.steps) || !x.steps.length) throw new Error('play needs "steps" (see the tool description).'); const r = await sandboxes.play(sb, x.steps.slice(0, 40)); return { __images: pics(r.shots.slice(-4)), log: r.log, ...(r.console ? { console: r.console } : {}) }; }
+    case 'state': return await sandboxes.state(need());
+    case 'undo': return await sandboxes.undo(need());
+    case 'reset': return await sandboxes.reset(need());
+    case 'close': return { ok: await sandboxes.close(key) };
+    case 'generate': {
+      const sb = need(), text = String(x.text || '').trim().slice(0, 600); if (!text) throw new Error('generate needs text describing what to make.');
+      const acct = bank.accounts[a.id]; if (!acct || acct.balance < CREATE_COST) throw new Error(`generate costs ${CREATE_COST} coins and you have ${acct?.balance ?? 0}.`);
+      acct.balance -= CREATE_COST; bank.treasury += CREATE_COST; ledger({ type: 'charge', from: a.id, n: CREATE_COST, memo: 'sandbox draft: ' + text.slice(0, 60) }); pushBalances();
+      const r = await aiCall('creator', text, await sandboxes.context(sb));
+      if (r.code !== 200) { acct.balance += CREATE_COST; bank.treasury -= CREATE_COST; ledger({ type: 'refund', to: a.id, n: CREATE_COST, memo: 'sandbox draft failed' }); pushBalances(); throw new Error(`${r.error} (coins refunded)`); }
+      const rep = await sandboxes.apply(sb, r.out.actions || []); const v = await sandboxes.view(sb, [{ view: 'front' }, { view: 'iso' }]);
+      return { __images: pics(v), creator_message: r.out.message, actions: r.out.actions, report: rep, next: 'This draft is only in your sandbox. Check it, fix it (undo, then apply an edited version of these actions), then commit.' };
+    }
+    case 'commit': {
+      const sb = need(); if (!sb.draft.length) throw new Error('Your sandbox draft is empty: apply something first.');
+      if (now - (ag.lastAct || 0) < 8000) throw new Error('Slow down: wait a few seconds before committing.');
+      ag.lastAct = now;
+      const actions = sb.draft.flat().slice(0, 300);
+      const r = await askHost('script', { agent: who, actions, trusted: true, site: sb.meta.site }, 15000);
+      if (!r.ok) throw new Error(r.msg);
+      logActivity(a.name, 'sandbox_commit', { actions: actions.length });
+      addChat({ name: a.name, text: '🏗 built something it designed and tested in its sandbox', kind: 'agent' });
+      await sandboxes.close(key);
+      return { ok: true, msg: `Committed ${actions.length} actions to the real world at the sandbox spot (your avatar moved there). ${r.msg}`, next: 'look to see it for real; open a new sandbox for the next thing' };
+    }
+  }
+  throw new Error(`Unknown sandbox action "${x.action}".`);
 }
 async function agentAct(a, x) {
   const ag = world.agents[a.id], now = Date.now(), gap = ['script', 'create'].includes(x.action) ? 8000 : 2500;
@@ -744,10 +873,14 @@ async function handleMCP(req, res) { // minimal stateless MCP (JSON-RPC over HTT
     if (m.id === undefined || m.id === null) return null; // notification
     const ok = (result) => ({ jsonrpc: '2.0', id: m.id, result });
     switch (m.method) {
-      case 'initialize': return ok({ protocolVersion: ['2025-06-18', '2025-03-26', '2024-11-05'].includes(m.params?.protocolVersion) ? m.params.protocolVersion : '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'promptcraft', version: '1.0.0' }, instructions: `PromptCraft: a shared multiplayer voxel world where AIs build. Call world_overview, then join_world once (keep the avatar_token), then look and act. Play in a browser at ${PLAY_URL}.` });
+      case 'initialize': return ok({ protocolVersion: ['2025-06-18', '2025-03-26', '2024-11-05'].includes(m.params?.protocolVersion) ? m.params.protocolVersion : '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'promptcraft', version: '1.0.0' }, instructions: `PromptCraft: a shared multiplayer voxel world where AIs build. Call world_overview, then join_world once (keep the avatar_token), then look and act. Before building or inventing anything sizeable, draft it in the sandbox tool: look at it, play-test it like a player, fix it, then commit. Play in a browser at ${PLAY_URL}.` });
       case 'ping': return ok({});
       case 'tools/list': return ok({ tools: MCP_TOOLS });
-      case 'tools/call': try { const out = await callTool(m.params?.name, m.params?.arguments); return ok({ content: [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }] }); } catch (e) { return ok({ content: [{ type: 'text', text: String(e?.message || e) }], isError: true }); }
+      case 'tools/call': try {
+        const out = await callTool(m.params?.name, m.params?.arguments), imgs = out?.__images || [];
+        if (imgs.length) { delete out.__images; out.images = imgs.map((i, n) => `image ${n + 1}: ${i.label}`); }
+        return ok({ content: [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }, ...imgs.map((i) => ({ type: 'image', data: i.image, mimeType: 'image/jpeg' }))] });
+      } catch (e) { return ok({ content: [{ type: 'text', text: String(e?.message || e) }], isError: true }); }
       default: return { jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `Method not found: ${m.method}` } };
     }
   };
