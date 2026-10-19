@@ -109,6 +109,35 @@ Any MCP-capable agent can play in the world through `POST /mcp`: `claude mcp add
 - **Outside agents** get the same thing as the MCP `sandbox` tool, with as many turns as they like.
 - **Limits:** `SANDBOX_MAX` sandboxes at once (default 3, closed after 10 idle minutes). Rendering is software WebGL (SwiftShader), and the Docker container is capped at 3 GB and 2 CPUs. Locally it uses your installed Chrome (`CHROME_PATH` to override).
 
+## The nation of Edge Goa (`nation.js`)
+
+`/nation found`, or the 🏛 panel (J), founds a nation around a capital near the spawn.
+- **Citizens:** the AI writes each one once, with a personality, backstory, wants, politics and temper. After that they run on a cheap simulation that costs no AI.
+  - **Each simulated hour:** citizens eat (buying food from farmers, fishers, cooks and merchants), earn (public servants get a salary; builders are paid per block they place), pay tax, and decide how they feel about the government.
+  - **When it goes badly:** they strike, then march on the town hall and protest. Their slogans are AI-written.
+  - **Talking:** players can talk to any of them with `@Name`.
+- **The cabinet:** four AI ministers (President, Finance, Public Works, Welfare) meet every few minutes while people are online, or right away after a petition or a protest.
+  - **How a meeting runs:** each minister reads a briefing (treasury, prices, moods, grievances, projects, petitions), speaks and proposes. The President decides.
+  - **What they can do:** set laws (`taxRate`, `ubi`, `salary`, `pieceRate`, `foodSubsidy`), print money (prices rise), pay bonuses, commission public works, and answer protests.
+  - **Pausing:** `/nation off` pauses them; `/nation meet` calls a meeting.
+- **Public works:** the architect (the Creator AI) designs the building in a sandbox at its site, so the exact block list is known. Citizens suited to the job walk there and place it block by block. The treasury pays for materials and wages per block. If the money runs out, work stops, wages go unpaid, and people get angry.
+- **The court:** `/sue <name|government> <claim>` (or the MCP `sue` action). The AI judge reads the ledger and the laws, then rules. It can order compensation or strike down a law. Citizens owed wages sue the government on their own.
+- **Players and agents** take part with `/petition`, `/sue`, `/propose` and `/vote`, the MCP `petition` and `sue` actions, or simply by talking to people.
+
+## On-chain money (`chain.js`, `contracts/`)
+
+xRupee is a **mock ERC20** with no real-world value. The server starts `anvil` as a fork of Base mainnet at a pinned block, with free gas and state saved in `data/chain/`, and deploys three contracts:
+- **`MockToken`:** the currency.
+- **`PromptCraftVault`:** custodial balances for every player, agent, citizen and the treasury, backed 1:1 by the token it holds.
+- **`PromptCraftGov`:** the public record of laws, cabinet decisions, court cases and rulings, and public works.
+
+Every coin movement goes through `pay()` in server.js. The in-memory ledger updates at once, and the vault follows in batched operator transactions every couple of seconds, so players need no wallet or gas. On restart the server adopts the chain's balances.
+- **Your own tokens:** set `CURRENCY_TOKEN=<erc20 address>`.
+- **Another chain:** set `CHAIN_RPC` and `CHAIN_PK`.
+- **Off:** `CHAIN=off`.
+
+`/bank` and `GET /api/chain` show the addresses and the latest transaction. Rebuild the contracts with `forge build --root contracts && node contracts/export-artifacts.mjs`.
+
 ## Riding
 
 Any creature with a `ride` field (`{"seat":[x,y,z],"fly":true,"speed":20}`, seat in blocks from its feet) can be ridden. Right-click it to climb on. WASD steers, flying mounts climb toward where you look, Space goes up and sneak goes down (or gets off a walking mount), and right-click gets off. The host simulates the mount from the rider's input, which other browsers send 10 times a second. As safety rails, nothing moves faster than 80 blocks/s or goes above y=196.
