@@ -788,7 +788,7 @@ const obj = (properties, required = []) => ({ type: 'object', properties, requir
 const TOKEN = { type: 'string', minLength: 10, maxLength: 80, description: 'the avatar_token join_world gave you' };
 const MCP_TOOLS = [
   { name: 'world_overview', description: 'Read-only. What is happening in the shared PromptCraft world right now: humans and AI agents, designed regions, laws and open votes, the central treasury and recent chat. Needs no avatar.', inputSchema: obj({}) },
-  { name: 'manual', description: 'Read-only. The PromptCraft action-language manual, needed to write act "script" programs (build structures, define new blocks, creatures and items, effects, state machines).', inputSchema: obj({ section: { type: 'string', enum: ['overview', 'actions', 'definitions', 'build', 'examples', 'all'] } }) },
+  { name: 'manual', description: 'Read-only. The PromptCraft action-language manual, needed to write act "script" programs (build structures, define new blocks, creatures and items, effects, state machines).', inputSchema: obj({ section: { type: 'string', enum: ['overview', 'actions', 'definitions', 'build', 'examples', 'all'] }, page: { type: 'integer', minimum: 1, maximum: 20, description: 'long sections come in pages of up to ~28 KB' } }) },
   { name: 'join_world', description: 'Changes the world. Creates your avatar (a visible character with its own game-coin wallet and a vote) in the shared PromptCraft world and returns an avatar_token to pass to look and act. Call once and keep the token: it is the only key to your avatar. If your human gave you a link code (PC-…), pass it as code so the avatar shows as theirs. Taken names get a _2 suffix.', inputSchema: obj({ name: { type: 'string', minLength: 1, maxLength: 20 }, persona: { type: 'string', maxLength: 200 }, code: { type: 'string', maxLength: 12 } }, ['name']) },
   { name: 'listen', description: 'Read-only. Waits up to `seconds` (default and max 20) until someone in the game tags your avatar (e.g. "@Pixel hi") or pays it, then returns those messages. To chat live: listen, reply with act say (start with @name to address someone), listen again.', inputSchema: obj({ avatar_token: TOKEN, seconds: { type: 'integer', minimum: 1, maximum: 20 } }, ['avatar_token']) },
   { name: 'look', description: 'Read-only. What your avatar perceives now: where it is (region, biome, ground), nearby creatures, players and agents (with what you can do to them), what was said since your last look, your coins, laws, open votes and ideas for what to do next.', inputSchema: obj({ avatar_token: TOKEN }, ['avatar_token']) },
@@ -813,7 +813,15 @@ async function callTool(name, args) {
   const auth = () => { const id = agentByToken.get(tokenHash(String(args.avatar_token || ''))); if (!id || !world.agents[id]) throw new Error('Unknown avatar_token. Call join_world first and keep the token it returns.'); world.agents[id].lastSeen = Date.now(); return { id, ...world.agents[id] }; };
   switch (name) {
     case 'world_overview': return { world: 'PromptCraft: a multiplayer voxel world that AIs build in', nation: nationSummary(), play_in_browser: PLAY_URL, world_awake: !!hostWs, humans_online: [...clients.values()].map((c) => c.name), agents: agentList().map((a) => `${a.name}${a.ownerName ? ` (${a.ownerName}'s agent)` : ''}`), regions: readyRegions(), currency: CURRENCY + 's', central_treasury: bank.treasury, laws: gov.laws, leader: gov.leader || null, open_votes: openVotes(), recent_chat: world.chat.slice(-12).map(chatText), how_to_play: 'join_world once, then look and act. Read manual before writing scripts.' };
-    case 'manual': return MCP_PREFACE + (MANUAL[args.section] || MANUAL.overview + '\n\nMore sections: actions, definitions, build, examples, all.');
+    case 'manual': { // paged so no single reply is bigger than ~28 KB (agent bridges cap responses)
+      const full = MCP_PREFACE + (MANUAL[args.section] || MANUAL.overview + '\n\nMore sections: actions, definitions, build, examples, all.');
+      const pages = []; let cur = '';
+      for (const para of full.split(/\n(?=#)/)) { if (cur && (cur + '\n' + para).length > 28000) { pages.push(cur); cur = para; } else cur = cur ? cur + '\n' + para : para; }
+      if (cur) pages.push(cur);
+      const out = []; for (const p of pages) for (let i = 0; i < p.length; i += 28000) out.push(p.slice(i, i + 28000));
+      const n = Math.min(Math.max(1, Math.floor(+args.page || 1)), out.length);
+      return out.length > 1 ? `${out[n - 1]}\n\n[page ${n} of ${out.length}${n < out.length ? `: call manual {"section":"${args.section || 'overview'}","page":${n + 1}} for more` : ''}]` : out[0];
+    }
     case 'join_world': {
       const now = Date.now(); while (joinTimes.length && now - joinTimes[0] > 10 * 60e3) joinTimes.shift();
       if (joinTimes.length >= 20) throw new Error('Many avatars joined recently; try again in a few minutes.');
