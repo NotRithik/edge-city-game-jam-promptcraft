@@ -1411,13 +1411,14 @@ function updateEntity(e, dt, t) {
   }
   e.mods = e.mods.filter((m) => m.until > t || m.until === 0);
   if (e.isPlayer) return;
-  const ridden = rideActive(e);
-  // brain decisions at ~5Hz (a ridden mount lets its rider steer)
-  if (t >= e.nextBrain) { e.nextBrain = t + 0.2 + Math.random() * 0.1; tickStates(e, t); if (!ridden) brainThink(e, t); }
+  const ridden = rideActive(e), pinned = !!e.sitting;
+  // brain decisions at ~5Hz (a ridden mount lets its rider steer; someone sitting stays put)
+  if (t >= e.nextBrain) { e.nextBrain = t + 0.2 + Math.random() * 0.1; tickStates(e, t); if (!ridden && !pinned) brainThink(e, t); }
   // steering
   const spd = e.stat('speed') * (e._speedMul || 1);
   let goal = e.moveGoal || e.goal, moving = false;
   if (ridden) moving = rideSteer(e, dt);
+  else if (pinned) { e.vel.x = e.vel.z = 0; }
   else if (e.stunT > 0) e.stunT -= dt;
   else {
     let dx = 0, dz = 0, d = 0;
@@ -1524,6 +1525,7 @@ function animateEntity(e, dt, t, moving) {
       case 'pulse': pv.scale.setScalar(1 + Math.sin(t * 5 + e.id) * 0.12); break;
     }
   }
+  if (e.sitting) { for (const p of e.parts) if (p.anim === 'legL' || p.anim === 'legR') p.pivot.rotation.x = -1.45; m.position.y = e.pos.y - 0.36 * sc; }
   // hurt flash + glow status
   const flash = e.hurtFlash > 0; if (flash) e.hurtFlash -= dt;
   const glowing = e.statuses.has('glow');
@@ -3684,7 +3686,7 @@ function updatePuppet(e, dt, t) { // smooth a remote player / host creature towa
 const r2 = (v) => Math.round(v * 100) / 100;
 function snapshot() {
   return entities.filter((e) => !e.dead).map((e) => [e.id, e.type, r2(e.pos.x), r2(e.pos.y), r2(e.pos.z), r2(e.yaw), Math.round(e.hp * 10) / 10, e.maxHp, r2(e.curScale()),
-    (e.statuses.has('invisible') ? 1 : 0) | (e.statuses.has('glow') ? 2 : 0) | (e.hurtFlash > 0 ? 4 : 0), e.name, e.def.isProjectile ? e.def : 0, e.heldKey || 0]);
+    (e.statuses.has('invisible') ? 1 : 0) | (e.statuses.has('glow') ? 2 : 0) | (e.hurtFlash > 0 ? 4 : 0) | (e.sitting ? 8 : 0), e.name, e.def.isProjectile ? e.def : 0, e.heldKey || 0]);
 }
 function entSave() {
   return { t: 'entsave', g: plainVars(globals), l: entities.filter((e) => !e.def.isProjectile && !e.puppet && !e.dead).slice(0, 250).map((e) => ({ id: e.id, type: e.type, pos: P3(e.pos), vars: plainVars(e.vars), hp: e.hp, name: e.name, home: P3(e.home), memory: e.memory, team: e.team, own: e.own, state: e.state, ambient: e.ambient, log: e.log })) };
@@ -3704,6 +3706,7 @@ function applyEnts(l) {
     e.netPos = { x, y, z }; e.netYaw = yaw; e.hp = hp; e.maxHp = maxHp; e.scale = sc; e.name = name; e.heldKey = held || '';
     e.statuses.clear(); if (fl & 1) e.statuses.set('invisible', { until: Infinity, power: 1 }); if (fl & 2) e.statuses.set('glow', { until: Infinity, power: 1 });
     if (fl & 4 && !(e.hurtFlash > 0)) e.hurtFlash = 0.15;
+    e.sitting = !!(fl & 8);
   }
   for (const [id, e] of net.ents) if (!seen.has(id)) { removeEntity(e); net.ents.delete(id); }
 }
@@ -3811,8 +3814,10 @@ function onNet(m) {
       case 'hostid': net.hostId = m.id; if (net.isHost && m.id !== net.myId) demote(); updateNetUI(); break;
       case 'bal': setBank(m); if (m.log) net.bankLog = m.log; break;
       case 'gov': net.gov = m.gov; break;
-      case 'nation': net.nation = m.n; if (uiMode === 'nation') renderNation(); break;
+      case 'nation': net.nation = m.n; hallViz.dirty = true; if (uiMode === 'nation') renderNation(); break;
       case 'cabinet': onCabinet(m); break;
+      case 'court': onCourt(m); break;
+      case 'holo': setHolo(m.holo); break;
       case 'region': setRegion(m.rk, m.r, false); if (m.r?.status === 'ready') toast(`🌍 New region: ${m.r.name}${m.r.by ? ` (by ${m.r.by})` : ''}`); else if (m.r?.status === 'pending') sysMsg(`🛰 ${m.r.by} is generating region ${m.r.name}…`); break;
       case 'ledger': { const w = net.waits.get(m.rid); if (w) { net.waits.delete(m.rid); w(m); } break; }
       case 'notice': toast(m.text); chatLine(esc(m.text), 'sys'); break;
@@ -3881,7 +3886,7 @@ function viewContext(e) { // Creator context for an agent's "create" request, se
 }
 function hostAgentOp(m) {
   const reply = (ok, msg, data) => netSend({ t: 'agentres', rid: m.rid, ok, msg, data });
-  if (['found', 'project', 'projectStatus'].includes(m.op)) { try { return hostNationOp(m, reply); } catch (err) { return reply(false, String(err?.message || err)); } }
+  if (['found', 'project', 'projectStatus', 'hall'].includes(m.op)) { try { return hostNationOp(m, reply); } catch (err) { return reply(false, String(err?.message || err)); } }
   try {
     const e = agentAvatar(m.agent || {}); if (!e) return reply(false, 'Could not place your avatar (the world is full of creatures).');
     switch (m.op) {
@@ -3961,7 +3966,8 @@ function startOnline(w) {
   for (const [k, r] of Object.entries(w.regions || {})) regions.set(k, r);
   anyBiomes = [...regions.values()].some((x) => x.status === 'ready');
   if (w.gov) net.gov = w.gov;
-  if (w.nation) net.nation = w.nation;
+  if (w.nation) { net.nation = w.nation; if (w.nation.meeting) HALLSTATE.meeting = { trigger: w.nation.meeting.trigger, speeches: [] }; if (w.nation.courtOpen) HALLSTATE.court = { ...w.nation.courtOpen }; }
+  if (w.holo) setHolo(w.holo);
   Object.assign(globals, w.globals || {});
   if (w.sky) applySky({ ...w.sky });
   net.applying = false;
@@ -4540,7 +4546,7 @@ function sbState() {
 // block), go on strike or march on the town hall when they're fed up, and ministers speak during cabinet meetings.
 const pickOne = (l) => l[Math.floor(Math.random() * l.length)];
 const NAT = { people: new Map(), projects: new Map(), lastCtl: 0, prog: new Map(), progT: 0 };
-const natPeople = () => { const n = net.nation; return n?.founded ? [...n.citizens.map((c) => ({ ...c, kind: 'citizen' })), ...n.ministers.map((m) => ({ ...m, kind: 'minister' })), ...(n.judge ? [{ ...n.judge, kind: 'judge' }] : [])] : []; };
+const natPeople = () => { const n = net.nation; return n?.founded ? [...n.citizens.map((c) => ({ ...c, kind: 'citizen' })), ...n.ministers.filter((m) => !m.agent).map((m) => ({ ...m, kind: 'minister' })), ...(n.judge ? [{ ...n.judge, kind: 'judge' }] : [])] : []; }; // elected agent ministers are their own avatars
 function natPersona(p) {
   const n = net.nation;
   if (p.kind === 'citizen') return `${p.name}, ${p.age}, a ${p.occupation} living in ${n.name}. ${p.personality || ''} You want: ${(p.wants || []).join('; ') || 'a good life'}. You are a free person with your own opinions, not a servant: talk like a real neighbour, complain about what bothers you, praise what's good, and say it if you're on strike or protesting and why.`;
@@ -4560,14 +4566,17 @@ function natSpawn(p) { // the host materialises a citizen, minister or judge as 
 function nationControl(t) { // host, ~3x a second
   const n = net.nation; if (!n?.founded || !isHost()) return;
   const byId = new Map(); for (const e of entities) if (e.vars?._cit && !e.dead) byId.set(e.vars._cit, e);
-  for (const p of natPeople()) {
+  const people = natPeople(), ids = new Set(people.map((p) => p.id));
+  for (const [id, e] of byId) if (!ids.has(id)) { removeEntity(e); byId.delete(id); } // e.g. an AI minister who stepped aside for an elected agent
+  for (const p of people) {
     let e = byId.get(p.id);
     if (!e) { if (nowS() - (NAT.people.get(p.id)?.spawnT || -99) < 10) continue; NAT.people.set(p.id, { spawnT: nowS() }); e = natSpawn(p); if (!e) continue; }
     const st = NAT.people.get(p.id) || {}; NAT.people.set(p.id, st);
     if (p.kind === 'citizen') e.vars._state = `you are ${p.status}${p.job ? ` (job: project #${p.job})` : ''}, mood ${Math.round(p.mood * 100)}%, trust in the government ${Math.round(p.trust * 100)}%, ${p.coins} ${net.currency}s in your wallet${p.grievances?.length ? `; what bothers you: ${p.grievances.join('; ')}` : ''}`;
+    if (hallRoutine(p, e, st, t)) continue;
     const capital = n.capital;
-    if (p.status === 'protesting' && capital) { // march on the town hall, chant, wave signs
-      if (!st.spot) st.spot = { x: capital.x + rnd(-5, 5), y: capital.y, z: capital.z + rnd(4, 9) };
+    if (p.status === 'protesting' && capital) { // march on the Hall of Government, chant, wave signs
+      if (!st.spot) st.spot = n.hall ? hallP([rnd(-6, 6), rnd(9, 14)]) : { x: capital.x + rnd(-5, 5), y: capital.y, z: capital.z + rnd(4, 9) };
       e.home = { ...st.spot }; if (dist3(e.pos, st.spot) > 3) e.moveGoal = { ...st.spot };
       if (t > (st.chant || 0)) { st.chant = t + 7 + Math.random() * 8; const sl = n.protest?.slogans || ['✊ ENOUGH!']; speak(e, pickOne(sl), 5, true); emojiBurst(e.eye(), pickOne(['✊', '📢', '😡', '🪧']), 2, 1.2); }
     } else if (p.status === 'striking') {
@@ -4575,6 +4584,11 @@ function nationControl(t) { // host, ~3x a second
       if (t > (st.chant || 0)) { st.chant = t + 12 + Math.random() * 10; emojiBurst(e.eye(), '😠', 1, 1); if (Math.random() < 0.4) speak(e, pickOne(['Not lifting another block until we get paid.', 'On strike!', 'Pay us first.', ...(p.grievances || []).map((g) => g.split(':')[0] + '!')]), 4, true); }
     } else if (p.status !== 'working' || !NAT.projects.get(p.job)) { st.spot = null; e.heldKey = ''; if (p.home) e.home = { x: p.home.x + 0.5, y: e.home.y, z: p.home.z + 0.5 }; }
     if (p.kind === 'citizen' && t > (st.moodT || 0)) { st.moodT = t + 20 + Math.random() * 20; const em = p.mood > 0.7 ? '😊' : p.mood > 0.45 ? null : p.mood > 0.3 ? '😕' : '😠'; if (em) emojiBurst(e.eye(), em, 1, 0.8); }
+  }
+  for (const m of n.ministers.filter((x) => x.agent)) { // elected agents' avatars take their seats for meetings too
+    const e = entities.find((x) => x.vars?._agent === m.id && !x.dead); if (!e) continue;
+    if (!NAT.people.has(m.id)) NAT.people.set(m.id, {});
+    hallRoutine({ ...m, kind: 'agentMinister' }, e, NAT.people.get(m.id), t);
   }
   workProjects(t, byId);
 }
@@ -4584,6 +4598,7 @@ function workProjects(t, byId) { // citizens build public projects one block at 
     if (P.status !== 'building') continue;
     for (const w of P.workers) {
       const c = n.citizens.find((x) => x.id === w.id), e = byId.get(w.id), st = (P.ws[w.id] ||= { target: -1, t: 0, since: 0 });
+      if (e) e.sitting = false;
       if (!e || !c || c.status !== 'working') { if (st.target >= 0) { P.retry.push(st.target); st.target = -1; } continue; } // on strike: their block waits for someone else
       if (st.target < 0 || st.target >= P.blocks.length) {
         while (!P.retry.length && P.next < P.blocks.length) { const b = P.blocks[P.next], id = BLOCK_ID[b[3]] ?? (b[3] === 'air' ? 0 : B.stone); if (getBlock(b[0], b[1], b[2]) === id) { P.next++; count(P, w.id); continue; } break; }
@@ -4631,13 +4646,23 @@ function hostNationOp(m, reply) {
       ensureArea(p.site.x, p.site.z);
       return reply(true, 'building');
     }
+    case 'hall': { // the Hall of Government, built in code so its seats, bench and screens are where the routines expect them
+      const x = Math.floor(m.at.x), z = Math.floor(m.at.z); ensureArea(x, z); ensureArea(x, z + 10);
+      const O = { x, y: surfaceY(x, z) + 1, z };
+      startBuild(hallOps(), O, { speed: 900 });
+      return reply(true, 'building the hall', { hall: O });
+    }
     case 'projectStatus': { const P = NAT.projects.get(m.id); if (P) { if (m.status === 'done') NAT.projects.delete(m.id); else P.status = m.status; } return reply(true, 'ok'); }
   }
   return reply(false, 'unknown op');
 }
 function nationKeepAlive() { const n = net.nation; if (!n?.founded) return []; return [n.capital, ...[...NAT.projects.values()].map((p) => p.site)].filter(Boolean); }
 function onCabinet(m) {
-  if (m.phase === 'open') chatLine(`🏛 <b>The cabinet is in session</b> (${esc(m.trigger || '')})`, 'ai');
+  if (m.phase === 'open') { chatLine(`🏛 <b>The cabinet is in session</b> in the Hall of Government (${esc(m.trigger || '')})`, 'ai'); HALLSTATE.meeting = { trigger: m.trigger, speeches: [] }; }
+  if (m.phase === 'speech') (HALLSTATE.meeting ||= { trigger: '', speeches: [] }).speeches.push({ name: m.name, role: m.role, text: m.text, props: m.props || [], president: !!m.president });
+  if (m.phase === 'decisions' && HALLSTATE.meeting) { Object.assign(HALLSTATE.meeting, { decisions: m.decisions || [], announcement: m.announcement }); const e = entities.find((x) => x.name === m.president && !x.dead); if (e && m.announcement) speak(e, m.announcement, 10, true, true); }
+  if (m.phase === 'close') { HALLSTATE.last = HALLSTATE.meeting; HALLSTATE.meeting = null; }
+  hallViz.dirty = true;
   if (m.phase === 'speech') {
     chatLine(`🏛 <b>${esc(m.name)}</b> <i>(${esc(m.role)})</i>: ${esc(m.text)}`, 'ai');
     const e = entities.find((x) => x.vars?._cit === m.id && !x.dead) || entities.find((x) => x.name === m.name && !x.dead);
@@ -4663,6 +4688,7 @@ function renderNation() {
       <p>${ch?.ready ? `⛓ Money is a mock ERC20 on a ${esc(ch.network)} (chain ${ch.chainId}); every wage, tax and purchase is an on-chain move in the vault ${esc((ch.vault || '').slice(0, 10))}…` : '⛓ chain starting…'}</p>
       ${n.capital ? `<p>📍 Capital at ${n.capital.x}, ${n.capital.y}, ${n.capital.z} · go there: <code>/tp ${n.capital.x} ${n.capital.y + 2} ${n.capital.z}</code></p>` : ''}
       <p><b>Laws:</b> ${Object.entries(n.laws).map(([k, v]) => `${esc(k)} ${v}`).join(' · ')}</p>
+      ${n.vision ? `<p>🌅 <b>Vision</b> (${esc(n.vision.by)}): <i>${esc(n.vision.text)}</i></p>` : ''}
       ${n.protest ? `<p class="nwarn">📢 Protest at the town hall: ${esc(n.protest.grievances.join('; '))}</p>` : ''}
       <p><b>News</b></p><div class="nnews">${n.news.slice().reverse().map((x) => `<div>${esc(x.text)}</div>`).join('')}</div>
       <p><button data-nat="meet">🏛 Call a cabinet meeting</button> <button data-nat="petition">✉️ Petition</button> <button data-nat="sue">⚖️ Sue</button> <button data-nat="autonomy">${n.autonomy ? '⏸ Pause the cabinet' : '▶ Let the cabinet govern'}</button></p>`;
@@ -4670,7 +4696,11 @@ function renderNation() {
     body = `<table class="ntable"><tr><th></th><th>Citizen</th><th>Job</th><th>Mood</th><th>Trust</th><th>Coins</th><th>Status</th></tr>${n.citizens.map((c) => `<tr title="${esc(c.personality || '')} · wants: ${esc((c.wants || []).join(', '))}"><td>${moodFace(c.mood)}</td><td>${esc(c.name)} <small>${c.age}</small></td><td>${esc(c.occupation)}</td><td>${bar(c.mood, '#7c5')}</td><td>${bar(c.trust, '#59c')}</td><td>${c.coins}</td><td>${esc(c.status)}${c.grievances?.length ? `<br><small>${esc(c.grievances[0])}</small>` : ''}</td></tr>`).join('')}</table><p><small>Talk to anyone with @Name in chat.</small></p>`;
   } else if (natTab === 'cabinet') {
     const s = n.sessions[n.sessions.length - 1];
-    body = `<p>${n.ministers.map((m) => `<b>${esc(m.name)}</b> · ${esc(m.role)} <small>(${esc(m.ideology)})</small>`).join('<br>')}</p>` + (s ? `<p><b>Last meeting</b> (${esc(s.trigger)}):</p>${s.speeches.map((x) => `<p>🗣 <b>${esc(x.name)}</b>: ${esc(x.text)}</p>`).join('')}<p>✅ ${esc(s.decisions.join(' · ') || 'no changes')}</p><p><i>${esc(s.announcement || '')}</i></p>` : '<p>No meetings yet.</p>');
+    const dirs = (n.directives || []).slice().reverse();
+    body = `<p>${n.ministers.map((m) => `${m.agent ? '🤖 ' : ''}<b>${esc(m.name)}</b> · ${esc(m.role)} <small>(${esc(m.agent ? 'elected AI agent: ' + m.ideology : m.ideology)})</small>`).join('<br>')}</p>
+      <p><small>AI agents can win a seat (MCP tool <code>government run</code>, then a public vote), set the vision and give directives that the cabinet carries out.</small></p>
+      ${n.vision ? `<p>🌅 <b>Vision</b> (${esc(n.vision.by)}, ${esc(n.vision.role)}): <i>${esc(n.vision.text)}</i></p>` : ''}
+      ${dirs.length ? `<p><b>Directives</b></p>${dirs.map((d) => `<p>📜 #${d.id} <b>${esc(d.by)}</b>: ${esc(d.text)} <small>· ${esc(d.status)}${d.outcome ? `: ${esc(d.outcome)}` : ''}</small></p>`).join('')}` : ''}` + (s ? `<p><b>Last meeting</b> (${esc(s.trigger)}):</p>${s.speeches.map((x) => `<p>🗣 <b>${esc(x.name)}</b>: ${esc(x.text)}</p>`).join('')}<p>✅ ${esc(s.decisions.join(' · ') || 'no changes')}</p><p><i>${esc(s.announcement || '')}</i></p>` : '<p>No meetings yet.</p>');
   } else if (natTab === 'projects') {
     body = n.projects.length ? n.projects.slice().reverse().map((p) => `<p><b>#${p.id} ${esc(p.name)}</b> <small>${esc(p.purpose || '')}${p.site ? ` · at ${p.site.x}, ${p.site.z} (/tp ${p.site.x} ${p.site.y + 4} ${p.site.z + 12})` : ''}</small><br>${esc(p.status)}${p.total ? ` · ${p.done}/${p.total} blocks ${bar(p.done / p.total, '#fc4')}` : ''} · spent ${p.spent}/${p.budget} · ${p.workers.length} workers${p.note ? `<br><small>${esc(p.note)}</small>` : ''}</p>`).join('') : '<p>No public works yet.</p>';
   } else if (natTab === 'court') {
@@ -4687,6 +4717,167 @@ function natAction(k) {
   if (k === 'found') go('found'); else if (k === 'meet') go('meet'); else if (k === 'autonomy') go('autonomy', [net.nation?.autonomy ? 'off' : 'on']);
   else if (k === 'petition') { const t = prompt('What do you want the cabinet to do?'); if (t) go('petition', t.split(/\s+/)); }
   else if (k === 'sue') { const who = prompt('Who are you suing? (a name, or "government")'); if (!who) return; const claim = prompt('Your claim:'); if (claim) go('sue', [who.replace(/\s+/g, '_'), ...claim.split(/\s+/)]); }
+}
+// ---- the Hall of Government: a glass-walled chamber at the capital. Ministers walk in and sit at the council table for
+// cabinet meetings, the judge takes the bench for hearings, citizens watch from the gallery; the screen inside shows what
+// is being debated, a board outside shows the laws, and a hologram of the latest planned building turns over the table.
+const HALL = { // block offsets from the hall's origin (floor level), [x, z, yaw]
+  president: [-5, 0, Math.PI / 2], judge: [0, -5, 0], witness: [0, 4, Math.PI], doorIn: [0, 5], doorOut: [0, 9],
+  seats: [[-3, -2, 0], [-1, -2, 0], [1, -2, 0], [3, -2, 0], [-3, 2, Math.PI], [-1, 2, Math.PI], [1, 2, Math.PI], [3, 2, Math.PI]],
+  gallery: [[-6, 5], [-5, 5], [5, 5], [6, 5], [-6, 4], [6, 4]],
+};
+function hallOps() {
+  const S = 'stone_bricks', ops = [
+    { op: 'flatten', from: [-10, 0, -9], to: [10, 0, 14], block: 'grass', clear: 12, depth: 3 },
+    { op: 'box', from: [-8, -1, -7], to: [8, -1, 7], block: S },
+    { op: 'box', from: [-5, -1, -3], to: [5, -1, 3], block: 'red_wool' },
+    { op: 'box', from: [-1, -1, 8], to: [1, -1, 14], block: S },
+    { op: 'walls', from: [-8, 0, -7], to: [8, 6, 7], block: 'glass' },
+    { op: 'walls', from: [-8, 0, -7], to: [8, 0, 7], block: S }, { op: 'walls', from: [-8, 6, -7], to: [8, 6, 7], block: S },
+    { op: 'box', from: [-5, 1, -7], to: [5, 6, -7], block: S }, { op: 'box', from: [-5, 3, 7], to: [5, 6, 7], block: S },
+    { op: 'clear', from: [-1, 0, 7], to: [1, 2, 7] },
+    { op: 'box', from: [-9, 7, -8], to: [9, 7, 8], block: 'planks' }, { op: 'box', from: [-3, 7, -2], to: [3, 7, 2], block: 'glass' },
+    { op: 'box', from: [-4, 0, -1], to: [4, 0, 1], block: 'planks' }, { op: 'set', at: [0, 0, 0], block: 'glowstone' },
+    { op: 'box', from: [-1, 0, -4], to: [1, 0, -4], block: 'gold_block' },
+  ];
+  for (const x of [-8, -4, 4, 8]) for (const z of [-7, 7]) ops.push({ op: 'box', from: [x, 0, z], to: [x, 6, z], block: 'log' });
+  for (const z of [-3, 1, 4]) for (const x of [-8, 8]) ops.push({ op: 'box', from: [x, 0, z], to: [x, 6, z], block: 'log' });
+  for (const [x, z] of [[-6, -5], [6, -5], [-6, 5], [6, 5]]) ops.push({ op: 'set', at: [x, 6, z], block: 'glowstone' });
+  return ops;
+}
+const hallP = (rel) => { const O = net.nation?.hall; return O ? { x: O.x + rel[0] + 0.5, y: O.y, z: O.z + rel[1] + 0.5 } : null; };
+const inHall = (p) => { const O = net.nation?.hall; return !!O && Math.abs(p.x - O.x - 0.5) < 7.8 && Math.abs(p.z - O.z - 0.5) < 6.8 && p.y < O.y + 6; };
+const HALLSTATE = { meeting: null, last: null, court: null };
+function walkTo(e, st, target, t) { // true once there; goes through the door, and steps over if stuck
+  let goal = target;
+  if (net.nation?.hall && inHall(target) !== inHall(e.pos)) {
+    const din = hallP(HALL.doorIn), dout = hallP(HALL.doorOut), d2 = (a) => Math.hypot(a.x - e.pos.x, a.z - e.pos.z);
+    goal = inHall(e.pos) ? (d2(din) > 1.4 ? din : dout) : (d2(dout) > 1.4 ? dout : din);
+  }
+  const k = `${Math.round(target.x)},${Math.round(target.z)}`;
+  if (st.goalKey !== k) { st.goalKey = k; st.since = t; }
+  if (t - st.since > 22) { burst(e.center(), '#c9a0ff', 8, 2); Object.assign(e.pos, { x: target.x, y: target.y + 0.05, z: target.z }); e.vel = { x: 0, y: 0, z: 0 }; st.since = t; }
+  if (Math.hypot(target.x - e.pos.x, target.z - e.pos.z) < 1.2) { e.moveGoal = null; return true; }
+  e.sitting = false; e.moveGoal = { ...goal }; e.home = { ...goal }; return false;
+}
+function sitAt(e, spot, yaw) { Object.assign(e.pos, { x: spot.x, y: spot.y + 0.02, z: spot.z }); e.vel = { x: 0, y: 0, z: 0 }; e.yaw = yaw; e.moveGoal = e.goal = null; e.home = { ...spot }; e.sitting = true; }
+const idHash = (s) => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+// who goes where (host): returns true if the hall routine handled this person this tick
+function hallRoutine(p, e, st, t) {
+  const n = net.nation; if (!n?.hall) return false;
+  const meeting = HALLSTATE.meeting, court = HALLSTATE.court;
+  if (p.kind === 'minister' || p.kind === 'agentMinister') {
+    const i = n.ministers.findIndex((m) => m.id === p.id);
+    if (meeting && i >= 0) { const [bx, bz, yaw] = i === 0 ? HALL.president : HALL.seats[(i - 1) % HALL.seats.length], spot = hallP([bx, bz]); if (walkTo(e, st, spot, t)) sitAt(e, spot, yaw); return true; }
+    if (e.sitting) { e.sitting = false; e.moveGoal = hallP(HALL.doorOut); }
+    if (p.kind === 'agentMinister') return true; // the agent drives its own avatar outside meetings
+    e.home = hallP([-6 + (i % 5) * 3, 12]); return true;
+  }
+  if (p.kind === 'judge') {
+    if (court) { const spot = hallP(HALL.judge); if (walkTo(e, st, spot, t)) sitAt(e, spot, HALL.judge[2]); return true; }
+    if (e.sitting) e.sitting = false; e.home = hallP([0, -3]); return true;
+  }
+  // citizens
+  if (p.status === 'working' || p.status === 'protesting' || p.status === 'striking') { if (e.sitting) e.sitting = false; return false; }
+  if (court && court.plaintiff === p.name) { const spot = hallP(HALL.witness); if (walkTo(e, st, spot, t)) { e.yaw = HALL.witness[2]; e.sitting = false; } return true; }
+  if (meeting && idHash(p.id) % 3 === 0) { // the curious ones come and watch
+    const watchers = n.citizens.filter((c) => c.status === 'idle' && idHash(c.id) % 3 === 0), k = watchers.findIndex((c) => c.id === p.id);
+    if (k >= 0 && k < HALL.gallery.length) { const spot = hallP(HALL.gallery[k]); if (walkTo(e, st, spot, t)) { e.yaw = Math.PI; e.sitting = false; } return true; }
+  }
+  if (isNight() && p.home) { // home to sleep
+    const home = { x: p.home.x + 0.5, y: p.home.y, z: p.home.z + 0.5 };
+    if (walkTo(e, st, home, t)) { e.sitting = true; e.moveGoal = null; if (t > (st.zzz || 0)) { st.zzz = t + 8 + Math.random() * 6; emojiBurst(e.eye(), '💤', 1, 0.6); } }
+    return true;
+  }
+  if (e.sitting) e.sitting = false;
+  if (idHash(p.id) % 4 === 1) { e.home = hallP([((idHash(p.id) >> 3) % 13) - 6, 10 + ((idHash(p.id) >> 5) % 5)]); return true; } // hangs around the plaza by day
+  return false;
+}
+// the hall's screen, the notice board outside and the hologram (every browser draws them)
+const hallViz = { at: null, group: null, screen: null, board: null, holo: null, holoKey: null, dirty: true };
+function hallCanvas(w, h, pw, ph) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 4;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph), new THREE.MeshBasicMaterial({ map: tex, fog: false }));
+  return { cv, g: cv.getContext('2d'), tex, mesh };
+}
+function ensureHallViz() {
+  const O = net.nation?.hall, key = O ? `${O.x},${O.y},${O.z}` : null;
+  if (key === hallViz.at) return;
+  if (hallViz.group) { scene.remove(hallViz.group); hallViz.group.traverse((o) => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose?.(); }); hallViz.group = null; }
+  hallViz.at = key; if (!O) return;
+  const g = new THREE.Group(); g.position.set(O.x + 0.5, O.y, O.z + 0.5);
+  hallViz.screen = hallCanvas(1280, 512, 10, 4); hallViz.screen.mesh.position.set(0, 3.4, -6.47); g.add(hallViz.screen.mesh);
+  hallViz.board = hallCanvas(1280, 384, 10, 3); hallViz.board.mesh.position.set(0, 4.55, 7.53); g.add(hallViz.board.mesh);
+  hallViz.holo = new THREE.Group(); hallViz.holo.position.set(0, 2.7, 0); g.add(hallViz.holo);
+  scene.add(g); hallViz.group = g; hallViz.dirty = true; hallViz.holoKey = null;
+}
+function wrapLines(g, text, maxW, maxLines) {
+  const words = String(text).split(/\s+/), out = []; let line = '';
+  for (const w of words) { const tryL = line ? line + ' ' + w : w; if (g.measureText(tryL).width > maxW && line) { out.push(line); line = w; if (out.length >= maxLines) break; } else line = tryL; }
+  if (out.length < maxLines && line) out.push(line);
+  if (out.length === maxLines && words.join(' ').length > out.join(' ').length) out[maxLines - 1] = out[maxLines - 1].replace(/\s*\S*$/, '…');
+  return out;
+}
+function drawHallScreen() {
+  const S = hallViz.screen; if (!S) return;
+  const { g, cv } = S, n = net.nation, W = cv.width, H = cv.height, F = "'Pixelify Sans', monospace";
+  g.fillStyle = '#0d1424'; g.fillRect(0, 0, W, H); g.strokeStyle = '#3b5a9a'; g.lineWidth = 8; g.strokeRect(4, 4, W - 8, H - 8);
+  let y = 62; const line = (text, size = 30, color = '#e8eefc', maxLines = 2) => { g.font = `${size}px ${F}`; g.fillStyle = color; for (const l of wrapLines(g, text, W - 70, maxLines)) { g.fillText(l, 34, y); y += size * 1.22; } };
+  const C = HALLSTATE.court, M = HALLSTATE.meeting || HALLSTATE.last;
+  if (C) {
+    line(`⚖️ COURT IN SESSION · case #${C.id}`, 46, '#ffd84d', 1); line(`${C.plaintiff} v ${C.defendant}`, 36, '#ffffff', 1); line(`Claim: "${C.claim}"`, 30, '#c9d6ff', 3);
+    if (C.verdict) { y += 6; line(`RULING: ${C.verdict}`, 38, C.verdict.includes('plaintiff') ? '#7dff9a' : '#ff9a9a', 1); line(C.reasoning || '', 28, '#e8eefc', 3); if (C.remedy && C.remedy !== 'none') line(`Remedy: ${C.remedy}`, 28, '#ffd84d', 2); }
+  } else if (M) {
+    line(`🏛 ${HALLSTATE.meeting ? 'CABINET IN SESSION' : 'LAST CABINET MEETING'} · ${M.trigger || ''}`, 40, '#ffd84d', 1);
+    if (M.decisions) { line(`✅ ${M.decisions.length ? M.decisions.join(' · ') : 'no changes'}`, 36, '#7dff9a', 3); if (M.announcement) line(`“${M.announcement}”`, 30, '#c9d6ff', 3); }
+    for (const sp of M.speeches.slice(M.decisions ? -1 : -3)) { if (y > H - 50) break; line(`${sp.name.split(' ')[0]} (${sp.role}): ${sp.text}`, 33, sp.president ? '#ffffff' : '#dfe6f7', 3); if (sp.props?.length) line(`   → ${sp.props.join(' · ')}`, 30, '#7fd4ff', 1); }
+  } else if (n?.founded) {
+    line(`🏛 HALL OF GOVERNMENT · ${n.name}`, 44, '#ffd84d', 1);
+    if (n.vision) line(`🌅 Vision (${n.vision.by}): ${n.vision.text}`, 30, '#e8eefc', 3);
+    const open = (n.directives || []).filter((d) => d.status === 'open'); if (open.length) line(`📜 On the agenda: ${open.map((d) => d.text).join(' · ')}`, 28, '#7fd4ff', 2);
+    line(`The cabinet meets here every few minutes. Petition it: /petition …`, 26, '#9fb0d6', 2);
+  }
+  S.tex.needsUpdate = true;
+}
+function drawHallBoard() {
+  const B = hallViz.board, n = net.nation; if (!B || !n?.founded) return;
+  const { g, cv } = B, W = cv.width, F = "'Pixelify Sans', monospace", cs = n.citizens || [], avg = (f) => Math.round((cs.reduce((s, c) => s + f(c), 0) / Math.max(1, cs.length)) * 100);
+  g.fillStyle = '#2b1d0e'; g.fillRect(0, 0, W, cv.height); g.strokeStyle = '#8a5a2b'; g.lineWidth = 10; g.strokeRect(5, 5, W - 10, cv.height - 10);
+  let y = 58; const line = (text, size, color, maxLines = 1) => { g.font = `${size}px ${F}`; g.fillStyle = color; for (const l of wrapLines(g, text, W - 70, maxLines)) { g.fillText(l, 34, y); y += size * 1.25; } };
+  line(`📜 ${n.name} · treasury ${n.treasury.toLocaleString()} ${n.currency} (on-chain)`, 40, '#ffe7b0');
+  line(`Laws: tax ${n.laws.taxRate}% · UBI ${n.laws.ubi} · salary ${n.laws.salary} · per block ${n.laws.pieceRate} · food subsidy ${n.laws.foodSubsidy}%`, 30, '#ffffff', 2);
+  line(`Mood ${avg((c) => c.mood)}% · trust ${avg((c) => c.trust)}% · food ${n.economy.foodPrice}${n.protest ? ' · 📢 PROTEST' : ''}`, 30, n.protest ? '#ff9a9a' : '#d8f5c8');
+  const last = n.news[n.news.length - 1]; if (last) line(`📰 ${last.text}`, 26, '#e0d0b0', 2);
+  B.tex.needsUpdate = true;
+}
+function setHolo(h) {
+  hallViz.holoData = h || null; hallViz.holoKey = null;
+}
+function updateHallViz(dt) {
+  ensureHallViz(); if (!hallViz.group) return;
+  if (hallViz.dirty) { hallViz.dirty = false; drawHallScreen(); drawHallBoard(); }
+  const h = hallViz.holoData, hk = h ? `${h.id}:${h.blocks.length}` : null;
+  if (hk !== hallViz.holoKey) {
+    hallViz.holoKey = hk; const G = hallViz.holo; while (G.children.length) { const c = G.children.pop(); c.geometry?.dispose(); c.material?.map?.dispose(); c.material?.dispose?.(); }
+    if (h?.blocks?.length) {
+      const bs = h.blocks; let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+      for (const [x, y, z] of bs) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); z0 = Math.min(z0, z); x1 = Math.max(x1, x); y1 = Math.max(y1, y); z1 = Math.max(z1, z); }
+      const sc = 3.4 / Math.max(x1 - x0 + 1, z1 - z0 + 1, (y1 - y0 + 1) * 1.3, 4), cx = (x0 + x1 + 1) / 2, cz = (z0 + z1 + 1) / 2;
+      const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(sc * 0.96, sc * 0.96, sc * 0.96), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85, fog: false }), bs.length);
+      const m4 = new THREE.Matrix4(), col = new THREE.Color();
+      bs.forEach(([x, y, z, k], i) => { m4.makeTranslation((x + 0.5 - cx) * sc, (y - y0) * sc, (z + 0.5 - cz) * sc); mesh.setMatrixAt(i, m4); const c = BLOCKS[BLOCK_ID[k]]?.color || [140, 200, 255]; mesh.setColorAt(i, col.setRGB(c[0] / 255 * 0.8 + 0.2 * 0.55, c[1] / 255 * 0.8 + 0.2 * 0.85, c[2] / 255 * 0.8 + 0.2)); });
+      G.add(mesh);
+      const tag = textSprite(`📐 ${h.name} (planned)`, { size: 0.28, color: '#9fe6ff' }); tag.position.y = (y1 - y0 + 1) * sc + 0.5; G.add(tag);
+    }
+  }
+  hallViz.holo.rotation.y += dt * 0.35;
+}
+function onCourt(m) {
+  if (m.phase === 'open') { HALLSTATE.court = { ...m }; chatLine(`⚖️ <b>Court is in session</b>: case #${m.id}, ${esc(m.plaintiff)} v ${esc(m.defendant)}`, 'ai'); const j = entities.find((e) => e.name === m.judge && !e.dead); if (j) speak(j, `Court is in session. Case ${m.id}: ${m.plaintiff} versus ${m.defendant}.`, 8, true, true); }
+  if (m.phase === 'ruling' && HALLSTATE.court) { Object.assign(HALLSTATE.court, m); const j = entities.find((e) => e.name === m.judge && !e.dead); if (j) speak(j, `${m.verdict}. ${m.reasoning}`, 12, true, true); }
+  if (m.phase === 'close') HALLSTATE.court = null;
+  hallViz.dirty = true;
 }
 function spawnStarters() {
   const sp = findSpawn();
@@ -4744,6 +4935,7 @@ function tick(dt) {
   for (const r of net.players.values()) updatePuppet(r, dt, t);
   if (player.riding) seatRider();
   if (isHost() && net.online && t > NAT.lastCtl) { NAT.lastCtl = t + 1 / 3; nationControl(t); }
+  if (net.online && net.nation?.hall) updateHallViz(dt);
   if (isHost()) { tickVM(); updateBuilds(dt); tickBlocks(t); tickRules(t); tickRegions(t); tickDrops(t); if (!SANDBOX) tickSpawns(t); }
   if (!SANDBOX) { tickAgents(t); tickExplore(t); } updateAmbience(dt);
   if (net.online) netTick(t);

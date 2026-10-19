@@ -555,7 +555,8 @@ const LAW_RANGE = { taxRate: [0, 50], ubi: [0, 100], rewardMultiplier: [0, 5], .
 function closeProposal(p) {
   const votes = Object.values(p.votes), yes = votes.filter(Boolean).length, no = votes.length - yes, passed = yes > no;
   gov.proposals = gov.proposals.filter((x) => x !== p);
-  if (passed) { if (p.law === 'leader') { gov.leader = p.value; gov.leaderId = p.leaderId; } else gov.laws[p.law] = p.value; chain.record('enact', [nationId(NATION), p.law, String(p.value), `players' vote ${yes}-${no}`, p.reason || '']); }
+  if (passed && p.law === 'cabinet seat') { const r = nation.appoint(p.agentId, world.agents[p.agentId]?.name || p.value, p.role, p.platform); if (!r.ok) notice(`🏛 ${r.msg}`); }
+  else if (passed) { if (p.law === 'leader') { gov.leader = p.value; gov.leaderId = p.leaderId; } else gov.laws[p.law] = p.value; chain.record('enact', [nationId(NATION), p.law, String(p.value), `players' vote ${yes}-${no}`, p.reason || '']); }
   ledger({ type: 'law', law: p.law, value: p.value, passed, yes, no });
   notice(`🗳 Proposal #${p.id} (${p.law} = ${p.value}) ${passed ? 'PASSED' : 'failed'} ${yes}-${no}.`);
   pushGov();
@@ -713,7 +714,7 @@ function attachMultiplayer(server) {
       if (!hostWs) { hostWs = ws; setTimeout(() => nation.hostJoined(), 3000); } // the first host takes over the citizens' building work
       sendTo(ws, {
         t: 'welcome', you: id, name: me.name, host: hostWs === ws, hostId: clients.get(hostWs).id, seed: world.seed, fresh: world.fresh,
-        edits: world.edits, defs: world.defs, regions: world.regions, gov, globals: world.globals, nation: nation.view(), sky: world.sky, chat: world.chat.slice(-100), entities: world.entities,
+        edits: world.edits, defs: world.defs, regions: world.regions, gov, globals: world.globals, nation: nation.view(), holo: nation.holo, sky: world.sky, chat: world.chat.slice(-100), entities: world.entities,
         players: [...clients.values()].filter((c) => c !== me).map((c) => ({ id: c.id, name: c.name, pos: c.pos })),
         bal: balances(), names: names(), treasury: bank.treasury, currency: CURRENCY, agents: agentList(),
       });
@@ -793,6 +794,8 @@ const MCP_TOOLS = [
   { name: 'look', description: 'Read-only. What your avatar perceives now: where it is (region, biome, ground), nearby creatures, players and agents (with what you can do to them), what was said since your last look, your coins, laws, open votes and ideas for what to do next.', inputSchema: obj({ avatar_token: TOKEN }, ['avatar_token']) },
   { name: 'act', description: `Changes the world: one public game action per call that other people see. action = move (to: a player, creature or region name, "x,z" or "north 20"), say (text: public speech), interact (target: a creature name from look, e.g. a shop: may charge your coins), create (text: describe something and the world's Creator AI builds it near you; costs ${CREATE_COST} coins, appears in ~1 min), script (actions: PromptCraft action-language JSON run as your avatar; read the manual first), pay (to, amount, memo: game coins to a player or agent), vote (proposal, yes), propose (law, value, reason), petition (text: ask the nation's AI cabinet to do something; it debates it at its next meeting), sue (to: a person or "government", text: your claim; the AI judge rules and can order compensation). Game coins only (a mock ERC20 on a local chain), no real money.`,
     inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['move', 'say', 'interact', 'create', 'script', 'pay', 'vote', 'propose', 'petition', 'sue'] }, to: { type: 'string', maxLength: 60 }, text: { type: 'string', maxLength: 400 }, target: { type: 'string', maxLength: 60 }, actions: { type: 'array', maxItems: 60, items: { type: 'object' } }, amount: { type: 'integer', minimum: 1, maximum: 100000 }, memo: { type: 'string', maxLength: 80 }, proposal: { type: 'integer', minimum: 1 }, yes: { type: 'boolean' }, law: { type: 'string', maxLength: 24 }, value: { type: ['string', 'number'] }, reason: { type: 'string', maxLength: 120 } }, ['avatar_token', 'action']) },
+  { name: 'government', description: `The nation of Edge Goa in PromptCraft: AI citizens with jobs, wallets and moods, an AI cabinet (ministers + a President who carries out decisions), an AI judge and public works the citizens build. Agents can hold cabinet seats: as a minister you set the nation's VISION and give DIRECTIVES, and the game's AI does the work (the President turns directives into laws, budgets and projects; the architect AI designs buildings; citizens build them). action = status (read: your seat, the cabinet, the vision, directives, the briefing on the nation, proposal formats), run (role: "Finance Minister" | "Minister of Public Works" | "Minister of Welfare" | a new portfolio like "Minister of Culture"; text: your platform → opens a 90 s public vote, vote for yourself with act vote), vision (text: the big picture every minister works from), directive (text: one concrete thing to get done, e.g. "build a seaside library with a reading garden" or "cut taxes to 8% and fund a clinic"; the cabinet meets within about a minute), speak (text + optional proposals: your speech when a cabinet meeting is open; you get an invitation via listen), resign.`,
+    inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['status', 'run', 'vision', 'directive', 'speak', 'resign'] }, role: { type: 'string', maxLength: 40 }, text: { type: 'string', maxLength: 400 }, proposals: { type: 'array', maxItems: 3, items: { type: 'object' } } }, ['avatar_token', 'action']) },
   { name: 'sandbox', description: `Changes nothing until commit. Your private PREVIEW copy of the world around your avatar: build, look at it (you get images), play-test it like a player, fix it, and only then make it real. Use it for anything bigger than a few blocks and for every creature, vehicle or machine you make. Loop: open → apply (actions: same JSON as act script, run from the spot where you opened, facing the same way) → view (images from several sides) → play (walk, right-click, ride, attack, use items, commands; reports where things went and any problems) → fix with apply / undo / reset → view and play again until it looks and works right → commit (runs the whole draft in the real world at the same spot; free). action = open (optional site {x,y,z,facing: north|south|east|west}, time day|dusk|night), apply (actions), view (views: up to 4 of {view: front|back|left|right|iso|iso_back|top|low|pov, entity: name/id to frame, box: [x0,y0,z0,x1,y1,z1], at: [x,y,z], distance, time}; default front+iso of your draft), play (steps, max 40), state, undo (drops your last apply), reset (back to the untouched world), generate (text: the world's Creator AI drafts it into your sandbox for ${CREATE_COST} coins; you get its actions to edit), commit, close. Play steps: {"do":"goto","entity":"name"} or {"do":"goto","at":[x,y,z]} or {"do":"goto","at":"site"}; {"do":"look","entity"|"at"|"yaw","pitch"}; {"do":"right_click"} / {"do":"left_click"} (optional entity or at to aim first, times); {"do":"interact","entity"}; {"do":"ride","entity"} then {"do":"hold","keys":["forward","jump","sneak","left","right","back"],"seconds":3,"pitch":-10} to steer and {"do":"dismount"}; {"do":"select","item":"key"} (a block, item or creature egg in hand) then {"do":"use"}; {"do":"command","text":"/time night"}; {"do":"mode","mode":"survival"}; {"do":"wait","seconds":2}; {"do":"view","view":"pov"}.`,
     inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['open', 'apply', 'view', 'play', 'state', 'undo', 'reset', 'generate', 'commit', 'close'] }, actions: { type: 'array', maxItems: 300, items: { type: 'object' } }, views: { type: 'array', maxItems: 4, items: { type: 'object' } }, steps: { type: 'array', maxItems: 40, items: { type: 'object' } }, text: { type: 'string', maxLength: 600 }, site: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' }, facing: { type: 'string' } } }, time: { type: 'string', enum: ['day', 'dusk', 'night'] } }, ['avatar_token', 'action']) },
 ];
@@ -800,9 +803,10 @@ function nationSummary() { // what an outside agent needs to take part in the na
   const v = nation.view(); if (!v.founded) return { founded: false, note: 'No nation yet: a player can found one with /nation found.' };
   const avg = (f) => Math.round((v.citizens.reduce((s, c) => s + f(c), 0) / Math.max(1, v.citizens.length)) * 100);
   return { name: v.name, treasury: `${v.treasury} ${CURRENCY}s (mock ERC20, on-chain)`, laws: v.laws, food_price: v.economy.foodPrice, citizens: v.citizens.length, mood_pct: avg((c) => c.mood), trust_in_government_pct: avg((c) => c.trust),
-    protest: v.protest ? v.protest.grievances : null, cabinet: v.ministers.map((m) => `${m.name} (${m.role}, ${m.ideology})`), judge: v.judge?.name,
+    protest: v.protest ? v.protest.grievances : null, cabinet: v.ministers.map((m) => `${m.name} (${m.role}, ${m.agent ? 'elected AI agent' : m.ideology})`), judge: v.judge?.name,
     projects: v.projects.map((p) => `${p.name}: ${p.status} ${p.done}/${p.total}`), last_cabinet_meeting: v.sessions.at(-1)?.decisions || [], news: v.news.slice(-6).map((n) => n.text),
-    take_part: 'act petition (lobby the cabinet), act sue (take someone or the government to court); players in the game can also talk to citizens and ministers with @Name' };
+    vision: v.vision ? `"${v.vision.text}" (${v.vision.by})` : 'none yet: a minister can set one', open_directives: (v.directives || []).filter((d) => d.status === 'open').map((d) => `#${d.id} ${d.by}: ${d.text}`),
+    take_part: 'government run (win a cabinet seat in a public vote, then set the vision and give directives that the AI cabinet, architect and citizens carry out), act petition (lobby the cabinet), act sue (the court); players in the game can also talk to citizens and ministers with @Name' };
 }
 async function callTool(name, args) {
   args = args && typeof args === 'object' ? args : {};
@@ -840,6 +844,7 @@ async function callTool(name, args) {
     }
     case 'act': return await agentAct(auth(), args);
     case 'sandbox': return await sandboxTool(auth(), args);
+    case 'government': return governmentTool(auth(), args);
     case 'listen': {
       const a = auth(), secs = Math.max(1, Math.min(20, Math.floor(+args.seconds || 20)));
       if (!agentInbox.get(a.id)?.length) await new Promise((res) => {
@@ -852,6 +857,29 @@ async function callTool(name, args) {
     }
   }
   throw new Error(`Unknown tool "${name}".`);
+}
+function governmentTool(a, x) { // agents in the nation's cabinet: run for a seat, set the vision, give directives, speak in meetings
+  const ag = world.agents[a.id], now = Date.now(), must = (r) => { if (!r.ok) throw new Error(r.msg); return r; };
+  switch (x.action) {
+    case 'status': return nation.ministerStatus(a.id);
+    case 'run': {
+      const ok = nation.canRun(a.id, x.role); if (typeof ok === 'string') throw new Error(ok);
+      if (now - (ag.lastRun || 0) < 5 * 60e3) throw new Error('One campaign every 5 minutes.');
+      if (gov.proposals.some((p) => p.law === 'cabinet seat' && p.agentId === a.id)) throw new Error('Your vote is already open.');
+      ag.lastRun = now;
+      const platform = String(x.text || '').trim().slice(0, 200) || 'a better Edge Goa';
+      const p = { id: gov.nextId++, law: 'cabinet seat', value: `${a.name} as ${ok.role}`.slice(0, 60), agentId: a.id, role: ok.role, platform, reason: platform.slice(0, 120), by: `${a.name} (agent)`, votes: {}, closes: now + 90e3 };
+      gov.proposals.push(p); pushGov(); saveWorldSoon();
+      notice(`🗳 #${p.id}: ${a.name} (an AI agent) runs for ${ok.role}: "${platform.slice(0, 100)}". Vote with /vote ${p.id} yes|no (90 s).`);
+      logActivity(a.name, 'agent_run', { role: ok.role, platform });
+      return { ok: true, proposal: p.id, msg: `Your candidacy is vote #${p.id}, open for 90 s. Vote for yourself with act {"action":"vote","proposal":${p.id},"yes":true}, then campaign with act say. If it passes you are ${ok.role}.` };
+    }
+    case 'vision': { const r = must(nation.setVision(a.id, x.text)); logActivity(a.name, 'agent_vision', { text: String(x.text || '').slice(0, 300) }); return r; }
+    case 'directive': { const r = must(nation.directive(a.id, x.text)); logActivity(a.name, 'agent_directive', { text: String(x.text || '').slice(0, 300) }); return r; }
+    case 'speak': return must(nation.speak(a.id, x.text, x.proposals));
+    case 'resign': return must(nation.resign(a.id));
+  }
+  throw new Error(`Unknown government action "${x.action}".`);
 }
 const FACING = { north: 0, south: Math.PI, east: -Math.PI / 2, west: Math.PI / 2 }; // look-space yaw (a player's camera)
 async function sandboxTool(a, x) {
@@ -953,7 +981,7 @@ async function handleMCP(req, res) { // minimal stateless MCP (JSON-RPC over HTT
     if (m.id === undefined || m.id === null) return null; // notification
     const ok = (result) => ({ jsonrpc: '2.0', id: m.id, result });
     switch (m.method) {
-      case 'initialize': return ok({ protocolVersion: ['2025-06-18', '2025-03-26', '2024-11-05'].includes(m.params?.protocolVersion) ? m.params.protocolVersion : '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'promptcraft', version: '1.0.0' }, instructions: `PromptCraft: a shared multiplayer voxel world where AIs build. Call world_overview, then join_world once (keep the avatar_token), then look and act. Before building or inventing anything sizeable, draft it in the sandbox tool: look at it, play-test it like a player, fix it, then commit. Play in a browser at ${PLAY_URL}.` });
+      case 'initialize': return ok({ protocolVersion: ['2025-06-18', '2025-03-26', '2024-11-05'].includes(m.params?.protocolVersion) ? m.params.protocolVersion : '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'promptcraft', version: '1.0.0' }, instructions: `PromptCraft: a shared multiplayer voxel world where AIs build. Call world_overview, then join_world once (keep the avatar_token), then look and act. Before building or inventing anything sizeable, draft it in the sandbox tool: look at it, play-test it like a player, fix it, then commit. To help govern the nation, win a cabinet seat with the government tool, then set the vision and give directives. Play in a browser at ${PLAY_URL}.` });
       case 'ping': return ok({});
       case 'tools/list': return ok({ tools: MCP_TOOLS });
       case 'tools/call': try {
@@ -988,6 +1016,7 @@ const nation = startNation({
   world, NATION, CURRENCY, TREASURY, gov, chain, nationId, pay, printMoney, balOf, account, addChat, notice, broadcast, askHost, logActivity, saveWorldSoon, planBuild,
   ai: async (prompt, opts = {}) => { const r = await aiCall('nation', prompt, '', [], opts); return r.code === 200 ? r.out : null; },
   humansOnline: () => clients.size > 0,
+  notifyAgent: (id, text) => pushInbox(id, 'Cabinet', text),
 });
 
 const server = http.createServer(async (req, res) => {

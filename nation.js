@@ -18,11 +18,22 @@ const PRICE = (key) => { const k = String(key || ''); if (!k || k === 'air') ret
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const pick = (l) => l[Math.floor(Math.random() * l.length)];
 const r2 = (v) => Math.round(v * 100) / 100;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function propLabel(p) { // a proposal in a few words, for the chamber's screen
+  switch (p?.type) {
+    case 'law': return `${p.law} → ${p.value}`; case 'print': return `print ${p.amount}`; case 'project': return `build ${p.name} (${p.budget})`;
+    case 'fund': return `fund ${p.project} +${p.amount}`; case 'bonus': return `bonus ${p.amount} each`; case 'respond': return 'public statement';
+  }
+  return p?.type || '?';
+}
 
 export function startNation(ctx) {
-  const { world, pay, printMoney, balOf, TREASURY, account, CURRENCY, gov, chain, nationId, ai, addChat, notice, broadcast, askHost, humansOnline, logActivity, saveWorldSoon, planBuild, log = console.log } = ctx;
+  const { world, pay, printMoney, balOf, TREASURY, account, CURRENCY, gov, chain, nationId, ai, addChat, notice, broadcast, askHost, humansOnline, logActivity, saveWorldSoon, planBuild, notifyAgent = () => {}, log = console.log } = ctx;
   const N = (world.nation ||= { name: ctx.NATION, founded: null, capital: null, citizens: {}, ministers: [], judge: null, projects: [], cases: [], news: [], sessions: [], protest: null, autonomy: true, economy: { baseSupply: null, foodPrice: BASE_FOOD }, nextId: 1, petitions: [] });
   for (const [k, [, , d]] of Object.entries(NATION_LAWS)) if (gov.laws[k] === undefined) gov.laws[k] = d;
+  N.directives ||= []; N.retired ||= [];
+  const AGENT_WAIT = Number(process.env.AGENT_MINISTER_WAIT || 60); // seconds a cabinet meeting waits for elected agent ministers to speak
+  const isAgentMin = (m) => !!m?.agentId;
   const nid = nationId(N.name);
   let busy = { founding: false, session: false, planning: false, court: false };
   const cits = () => Object.values(N.citizens);
@@ -31,7 +42,8 @@ export function startNation(ctx) {
   const view = () => ({ name: N.name, founded: N.founded, capital: N.capital, autonomy: N.autonomy, treasury: balOf(TREASURY), currency: CURRENCY, laws: Object.fromEntries(Object.keys(NATION_LAWS).map((k) => [k, law(k)])),
     economy: { foodPrice: r2(N.economy.foodPrice), cpi: r2(N.economy.foodPrice / BASE_FOOD), supply: moneySupply(), unemployed: cits().filter((c) => CONSTRUCTION.has(c.occupation) && !c.job).length },
     citizens: cits().map((c) => ({ id: c.id, name: c.name, age: c.age, occupation: c.occupation, personality: c.personality, wants: c.wants, mood: r2(c.mood), trust: r2(c.trust), status: c.status, job: c.job, home: c.home, coins: balOf(c.id), grievances: c.grievances.slice(0, 3), eff: r2(efficiency(c)), look: c.look })),
-    ministers: N.ministers.map((m) => ({ id: m.id, name: m.name, role: m.role, ideology: m.ideology, home: m.home, look: m.look })), judge: N.judge && { id: N.judge.id, name: N.judge.name, home: N.judge.home },
+    ministers: N.ministers.map((m) => ({ id: m.id, name: m.name, role: m.role, ideology: m.ideology, home: m.home, look: m.look, agent: isAgentMin(m) })),
+    vision: N.vision || null, directives: N.directives.slice(-10), meeting: N.meeting ? { id: N.meeting.id, trigger: N.meeting.trigger } : null, hall: N.hall || null, courtOpen: N.courtOpen || null, judge: N.judge && { id: N.judge.id, name: N.judge.name, home: N.judge.home },
     projects: N.projects.slice(-8).map((p) => ({ id: p.id, name: p.name, purpose: p.purpose, status: p.status, site: p.site, total: p.blocks?.length || 0, done: p.done || 0, spent: p.spent || 0, budget: p.budget, workers: p.workers || [], note: p.note })),
     cases: N.cases.slice(-8), sessions: N.sessions.slice(-4), news: N.news.slice(-12), protest: N.protest, petitions: N.petitions.slice(-5), chain: chain.status });
   const push = () => broadcast({ t: 'nation', n: view() });
@@ -65,7 +77,8 @@ Reply with JSON only:
       news(`${N.name} is founded! ${cits().length} citizens move in around the capital. President ${N.ministers[0].name} leads a cabinet of ${N.ministers.length}; ${N.judge.name} runs the court. Talk to anyone with @Name.`, '🏛');
       logActivity(by, 'nation_found', { citizens: cits().length });
       saveWorldSoon();
-      setTimeout(() => commission({ name: 'Town Hall', purpose: 'the seat of government: a cabinet chamber, a courtroom and a public square', description: `A handsome town hall for ${N.name}: stone and timber, a clock tower, a cabinet chamber, a courtroom and a small plaza in front. About 15x15, two storeys.`, budget: 6000, by: 'founding charter' }), 3000);
+      buildHall();
+      setTimeout(() => commission({ name: 'Market Hall', purpose: 'a covered market and meeting place for traders, farmers and fisherfolk', description: `A lively covered market hall for ${N.name}: timber columns, a big roof, stalls inside, a little clock tower. About 14x12.`, budget: 6000, by: 'founding charter' }), 3000);
       return { ok: true, msg: `${N.name} founded with ${cits().length} citizens.` };
     } finally { busy.founding = false; }
   }
@@ -173,6 +186,8 @@ WHAT PEOPLE WANT: ${Object.entries(wants).sort((a, b) => b[1] - a[1]).slice(0, 8
 PROJECTS: ${N.projects.slice(-5).map((p) => `#${p.id} ${p.name} [${p.status}${p.blocks ? ` ${p.done || 0}/${p.blocks.length} blocks` : ''}, spent ${p.spent || 0}/${p.budget}]${p.note ? ' ' + p.note : ''}`).join('; ') || 'none'}.
 RECENT NEWS: ${N.news.slice(-5).map((n) => n.text).join(' | ')}
 PLAYER PETITIONS: ${N.petitions.filter((p) => !p.done).map((p) => `${p.by}: "${p.text}"`).join(' | ') || 'none'}.
+NATIONAL VISION: ${N.vision ? `"${N.vision.text}" (set by ${N.vision.by}, ${N.vision.role})` : 'none set yet'}.
+OPEN DIRECTIVES FROM ELECTED AGENT MINISTERS: ${N.directives.filter((d) => d.status === 'open').map((d) => `#${d.id} ${d.by} (${d.role}): "${d.text}"`).join(' | ') || 'none'}.
 COURT: ${N.cases.slice(-3).map((c) => `case #${c.id} ${c.plaintiff} v ${c.defendant}: ${c.verdict || 'pending'}`).join('; ') || 'quiet'}.`;
   }
   const PROPOSALS_DOC = `Proposal types (JSON objects): {"type":"law","law":"taxRate|ubi|salary|pieceRate|foodSubsidy","value":number,"why":"..."} · {"type":"print","amount":number,"why":"..."} (the central bank creates new money in the treasury: it raises prices) · {"type":"project","name":"...","purpose":"who it serves","description":"what to build, for the architect","budget":number} (citizens build it block by block; materials ~1-2 per block plus pieceRate wages per block; a house ~2000-4000, a hall ~10000-15000) · {"type":"fund","project":"<id or name>","amount":number} (raise a project's budget, e.g. when it ran over and stalled) · {"type":"bonus","amount":number,"why":"..."} (a one-off payment from the treasury to every citizen) · {"type":"respond","to":"protest|petition","text":"..."}`;
@@ -183,30 +198,44 @@ COURT: ${N.cases.slice(-3).map((c) => `case #${c.id} ${c.plaintiff} v ${c.defend
     try {
       const brief = briefing();
       broadcast({ t: 'cabinet', phase: 'open', trigger, ministers: N.ministers.map((m) => m.id) });
-      news(`The cabinet meets (${trigger}).`, '🏛');
-      const opinions = await Promise.all(N.ministers.slice(1).map(async (m) => {
-        const r = await ai(`You are ${m.name}, ${m.role} of ${N.name} (${m.ideology}). ${m.persona}\nCabinet meeting, called because of: ${trigger}.\n${brief}\n${PROPOSALS_DOC}\nSpeak in character to the cabinet (max 45 words, concrete, you may disagree with colleagues) and make 1-2 proposals that fit your role. JSON only: {"speech":"...","proposals":[...]}`, { cheap: true });
+      news(`The cabinet meets in the Hall of Government (${trigger}).`, '🏛');
+      const arrived = sleep(N.hall ? 12000 : 0); // let them walk in and sit down
+      const agents = N.ministers.filter(isAgentMin), meeting = N.meeting = { id: (N.meetingId = (N.meetingId || 0) + 1), trigger, speeches: [] };
+      for (const m of agents) notifyAgent(m.agentId, `🏛 Cabinet meeting #${meeting.id} is open (${trigger}). You sit as ${m.role}. Speak within ${AGENT_WAIT} s: government {"action":"speak","text":"your speech","proposals":[...]} (proposal formats are in government status). Briefing: ${brief.slice(0, 1800)}`);
+      const waitAgents = new Promise((res) => { const t0 = Date.now(), iv = setInterval(() => { if (meeting.speeches.length >= agents.length || Date.now() - t0 > AGENT_WAIT * 1000) { clearInterval(iv); res(); } }, 500); });
+      const aiOpinions = Promise.all(N.ministers.slice(1).filter((m) => !isAgentMin(m)).map(async (m) => {
+        const r = await ai(`You are ${m.name}, ${m.role} of ${N.name} (${m.ideology}). ${m.persona}\nCabinet meeting, called because of: ${trigger}.\n${brief}\n${PROPOSALS_DOC}\nSpeak in character to the cabinet (max 45 words, concrete, you may disagree with colleagues) and make 1-2 proposals that fit your role. The national vision and the directives come from elected ministers: work with them. JSON only: {"speech":"...","proposals":[...]}`, { cheap: true });
         const j = r?.json || {}; return { m, speech: String(j.speech || '…').slice(0, 300), proposals: (Array.isArray(j.proposals) ? j.proposals : []).slice(0, 2) };
       }));
-      for (const o of opinions) broadcast({ t: 'cabinet', phase: 'speech', id: o.m.id, name: o.m.name, role: o.m.role, text: o.speech });
+      const said = (async () => { const l = await aiOpinions; await arrived; for (const o of l) { broadcast({ t: 'cabinet', phase: 'speech', id: o.m.id, name: o.m.name, role: o.m.role, text: o.speech, props: o.proposals.map(propLabel) }); await sleep(7000); } return l; })();
+      const [aiSaid] = await Promise.all([said, waitAgents]);
+      const opinions = [...meeting.speeches, ...aiSaid];
+      for (const m of agents) if (!meeting.speeches.some((o) => o.m === m)) news(`${m.name} (${m.role}) did not speak at the meeting.`, '🪑');
       const P = N.ministers[0];
-      const r = await ai(`You are ${P.name}, President of ${N.name} (${P.ideology}). ${P.persona}\nYou chair the cabinet meeting (called because of: ${trigger}).\n${brief}\nYour ministers said:\n${opinions.map((o) => `- ${o.m.name} (${o.m.role}): "${o.speech}" proposes ${JSON.stringify(o.proposals)}`).join('\n')}\n${PROPOSALS_DOC}\nDecide. You may adopt, change or reject proposals; keep the treasury solvent (it holds ${balOf(TREASURY)}); at most one new project. JSON only: {"speech":"what you tell the cabinet (max 45 words)","decisions":[...],"announcement":"what you tell the citizens (max 50 words)","minutes":"2 sentences for the record"}`, { cheap: true });
+      const openDirs = N.directives.filter((d) => d.status === 'open');
+      const r = await ai(`You are ${P.name}, President of ${N.name} (${P.ideology}). ${P.persona}\nYou chair the cabinet meeting (called because of: ${trigger}).\n${brief}\nYour ministers said:\n${opinions.map((o) => `- ${o.m.name} (${o.m.role}${isAgentMin(o.m) ? ', 🤖 elected agent minister' : ''}): "${o.speech}" proposes ${JSON.stringify(o.proposals)}`).join('\n') || '(nobody else spoke)'}\n${PROPOSALS_DOC}\nDecide. Elected agent ministers (🤖) set the nation's vision and give directives: carry out their directives and proposals whenever the treasury allows (a build directive becomes a "project", a policy directive becomes "law" changes) and say so; if you refuse one, explain why in your speech. Keep the treasury solvent (it holds ${balOf(TREASURY)}); at most two new projects. ${openDirs.length ? `Report every open directive in "directives".` : ''} JSON only: {"speech":"what you tell the cabinet (max 45 words)","decisions":[...],"directives":[{"id":number,"status":"done|rejected","note":"short"}],"announcement":"what you tell the citizens (max 50 words)","minutes":"2 sentences for the record"}`, { cheap: true });
       const j = r?.json || {};
-      broadcast({ t: 'cabinet', phase: 'speech', id: P.id, name: P.name, role: P.role, text: String(j.speech || 'Let us proceed.').slice(0, 300) });
+      broadcast({ t: 'cabinet', phase: 'speech', id: P.id, name: P.name, role: P.role, text: String(j.speech || 'Let us proceed.').slice(0, 300), president: true });
+      await sleep(N.hall ? 6000 : 0);
       const done = [];
-      for (const d of (Array.isArray(j.decisions) ? j.decisions : []).slice(0, 4)) { const msg = await enact(d, `${P.name}'s cabinet`); if (msg) done.push(msg); }
+      for (const d of (Array.isArray(j.decisions) ? j.decisions : []).slice(0, 5)) { const msg = await enact(d, `${P.name}'s cabinet`); if (msg) done.push(msg); }
       for (const p of N.petitions) p.done = true;
+      for (const x of Array.isArray(j.directives) ? j.directives : []) { const d = openDirs.find((y) => y.id === +x.id); if (d) { d.status = x.status === 'rejected' ? 'rejected' : 'done'; d.outcome = String(x.note || '').slice(0, 200); } }
+      for (const m of agents) notifyAgent(m.agentId, `🏛 Meeting #${meeting.id} closed. Decisions: ${done.join(' · ') || 'none'}. ${openDirs.filter((d) => d.byId === m.agentId).map((d) => `Your directive #${d.id} → ${d.status}${d.outcome ? `: ${d.outcome}` : ''}`).join(' ')}`);
+      N.meeting = null;
       const minutes = String(j.minutes || done.join('; ') || 'No changes.').slice(0, 400);
       N.sessions.push({ t: Date.now(), trigger, speeches: [...opinions.map((o) => ({ name: o.m.name, role: o.m.role, text: o.speech })), { name: P.name, role: P.role, text: String(j.speech || '') }], decisions: done, announcement: String(j.announcement || '').slice(0, 400), minutes });
       if (N.sessions.length > 30) N.sessions.shift();
       chain.record('decide', [nid, 'cabinet', minutes]);
       news(`Cabinet decisions: ${done.join(' · ') || 'no changes'}. ${j.announcement ? `President ${P.name}: "${String(j.announcement).slice(0, 220)}"` : ''}`, '🏛');
+      broadcast({ t: 'cabinet', phase: 'decisions', decisions: done, announcement: String(j.announcement || '').slice(0, 300), president: P.name });
+      await sleep(N.hall ? 9000 : 0);
       broadcast({ t: 'cabinet', phase: 'close' });
       logActivity(P.name, 'cabinet_session', { trigger, decisions: done });
       saveWorldSoon(); push();
       return { ok: true, msg: done.join('; ') || 'No changes.' };
     } catch (e) { log('[nation] cabinet session failed: ' + e.message); return { ok: false, msg: e.message }; }
-    finally { busy.session = false; }
+    finally { busy.session = false; N.meeting = null; }
   }
   async function enact(d, by) {
     if (!d || typeof d !== 'object') return null;
@@ -214,7 +243,7 @@ COURT: ${N.cases.slice(-3).map((c) => `case #${c.id} ${c.plaintiff} v ${c.defend
       case 'law': { const k = String(d.law), L = NATION_LAWS[k]; if (!L) return null; const v = clamp(Math.round(+d.value), L[0], L[1]); if (!Number.isFinite(v) || v === law(k)) return null; gov.laws[k] = v; chain.record('enact', [nid, k, String(v), by, String(d.why || '').slice(0, 120)]); broadcast({ t: 'gov', gov }); return `${k} → ${v}`; }
       case 'print': { const n = clamp(Math.floor(+d.amount), 0, 200000); if (!n) return null; printMoney(n, `printed by ${by}: ${String(d.why || '').slice(0, 50)}`, by); return `printed ${n} ${CURRENCY}s`; }
       case 'bonus': { const n = clamp(Math.floor(+d.amount), 0, 500); if (!n || balOf(TREASURY) < n * cits().length) return null; for (const c of cits()) { pay(TREASURY, c.id, n, 'bonus'); c.lastIncome += n; c.trust = clamp(c.trust + 0.05, 0, 1); } return `bonus of ${n} to every citizen`; }
-      case 'project': { if (N.projects.some((p) => p.status === 'planning')) return null; const res = await commission({ name: String(d.name || 'Public works').slice(0, 40), purpose: String(d.purpose || '').slice(0, 120), description: String(d.description || d.name || '').slice(0, 500), budget: clamp(Math.floor(+d.budget || 3000), 200, 50000), by }); return res.ok ? `commissioned ${d.name} (budget ${d.budget})` : null; }
+      case 'project': { if (N.projects.filter((p) => p.status === 'planning').length >= 2) return null; const res = await commission({ name: String(d.name || 'Public works').slice(0, 40), purpose: String(d.purpose || '').slice(0, 120), description: String(d.description || d.name || '').slice(0, 500), budget: clamp(Math.floor(+d.budget || 3000), 200, 50000), by }); return res.ok ? `commissioned ${d.name} (budget ${d.budget})` : null; }
       case 'fund': { // top up a project's budget (and restart it if the money had run out)
         const p = N.projects.find((x) => x.id === +d.project || x.name.toLowerCase() === String(d.project || '').toLowerCase()); const n = clamp(Math.floor(+d.amount), 0, 100000);
         if (!p || !n || p.status === 'done' || p.status === 'cancelled') return null;
@@ -251,6 +280,7 @@ COURT: ${N.cases.slice(-3).map((c) => `case #${c.id} ${c.plaintiff} v ${c.defend
       if (p.estimate * 1.1 > p.budget && balOf(TREASURY) > p.estimate * 1.5) { news(`The plans for "${p.name}" cost more than budgeted: the budget is revised from ${p.budget} to ${Math.ceil(p.estimate * 1.1)} ${CURRENCY}s.`, '🧾'); p.budget = Math.ceil(p.estimate * 1.1); }
       p.chainId = N.chainProjects = (N.chainProjects || 0) + 1; chain.record('approveProject', [nid, p.name, BigInt(p.budget), Math.round(p.site.x), Math.round(p.site.y), Math.round(p.site.z)]);
       rebalanceWorkers();
+      setHolo(p);
       news(`Plans for "${p.name}" are ready: ${p.blocks.length} blocks, about ${p.estimate} ${CURRENCY}s (materials ${p.materials} + wages). ${p.workers.length} citizens head to the site.`, '🏗');
       sendProject(p); push(); saveWorldSoon();
     } finally { busy.planning = false; }
@@ -310,23 +340,43 @@ COURT: ${N.cases.slice(-3).map((c) => `case #${c.id} ${c.plaintiff} v ${c.defend
     saveWorldSoon(); push();
   }
 
+  // ---------------------------------------------------------------- the Hall of Government (built by the host at the capital; designed in code so seats are known)
+  async function buildHall() {
+    if (N.hall || !N.capital) return;
+    const r = await askHost('hall', { at: N.capital }, 20000);
+    if (!r.ok) { log('[nation] hall not built yet: ' + r.msg); return; }
+    N.hall = r.data.hall; saveWorldSoon(); push();
+    chain.record('decide', [nid, 'hall', `The Hall of Government stands at ${N.hall.x},${N.hall.y},${N.hall.z}`]);
+    news('The Hall of Government stands at the capital: the cabinet meets and the court sits inside. Come and watch.', '🏛');
+  }
+  function setHolo(p) {
+    const b = p.blocks.filter((x) => x[3] !== 'air'), step = Math.max(1, Math.ceil(b.length / 2500));
+    N.holo = { name: p.name, id: p.id, blocks: b.filter((_, i) => i % step === 0) };
+    broadcast({ t: 'holo', holo: N.holo });
+  }
+
   // ---------------------------------------------------------------- the court
   async function fileCase({ plaintiff, defendant, claim, by }) {
     if (!N.founded) return { ok: false, msg: 'There is no court until the nation is founded (/nation found).' };
     if (busy.court) return { ok: false, msg: 'The court is hearing another case; try again in a minute.' };
     const id = N.cases.length + 1, cs = { id, plaintiff, defendant, claim: String(claim).slice(0, 300), t: Date.now(), status: 'hearing' };
     N.cases.push(cs); push(); busy.court = true;
-    news(`Case #${id}: ${plaintiff} v ${defendant}: "${cs.claim}". ${N.judge.name} is hearing it.`, '⚖️');
+    news(`Case #${id}: ${plaintiff} v ${defendant}: "${cs.claim}". ${N.judge.name} is hearing it in the Hall of Government.`, '⚖️');
+    N.courtOpen = { id, plaintiff, defendant, claim: cs.claim }; broadcast({ t: 'court', phase: 'open', id, plaintiff, defendant, claim: cs.claim, judge: N.judge.name });
+    const seated = sleep(N.hall ? 10000 : 0);
     chain.record('fileCase', [nid, plaintiff, defendant, cs.claim]);
     try {
       const facts = world.bank.log.filter((l) => [l.from, l.to, l.by].some((x) => x && (names(x) === plaintiff || names(x) === defendant))).slice(-12).map((l) => JSON.stringify(l)).join('\n');
       const r = await ai(`You are ${N.judge.name}, judge of ${N.name}. ${N.judge.persona}\nCASE #${id}: ${plaintiff} (plaintiff) v ${defendant} (defendant). Claim: "${cs.claim}".\nThe law: ${Object.entries(NATION_LAWS).map(([k, [, , , w]]) => `${k}=${law(k)} (${w})`).join('; ')}.\nRelevant ledger records:\n${facts || 'none'}\nState of the nation: ${briefing().slice(0, 1500)}\nRule fairly and briefly. Remedies: {"type":"compensation","from":"<defendant name or 'government'>","to":"<plaintiff name>","amount":number} · {"type":"strike_law","law":"<law key>"} (reset it to its default, if the law is unjust) · {"type":"none"}. JSON only: {"verdict":"for plaintiff|for defendant","reasoning":"max 40 words","remedy":{...}}`, {});
+      await seated;
       const j = r?.json || {}; cs.verdict = String(j.verdict || 'dismissed').slice(0, 40); cs.reasoning = String(j.reasoning || '').slice(0, 300); cs.status = 'decided';
       cs.remedy = applyRemedy(j.remedy || {}, cs);
       chain.record('rule', [BigInt(id), cs.verdict, cs.remedy]);
       news(`Ruling in case #${id}: ${cs.verdict}. "${cs.reasoning}" ${cs.remedy !== 'none' ? `Remedy: ${cs.remedy}.` : ''}`, '⚖️');
+      broadcast({ t: 'court', phase: 'ruling', id, judge: N.judge.name, verdict: cs.verdict, reasoning: cs.reasoning, remedy: cs.remedy });
+      await sleep(N.hall ? 10000 : 0);
       return { ok: true, msg: `${cs.verdict}: ${cs.reasoning}` };
-    } finally { busy.court = false; saveWorldSoon(); push(); }
+    } finally { busy.court = false; N.courtOpen = null; broadcast({ t: 'court', phase: 'close', id }); saveWorldSoon(); push(); }
   }
   function names(id) { return world.bank.accounts[id]?.name || (id === TREASURY ? 'government' : id); }
   function idByName(nm) { // "Asha Kamat", "asha_kamat" or just "Asha"
@@ -349,16 +399,99 @@ COURT: ${N.cases.slice(-3).map((c) => `case #${c.id} ${c.plaintiff} v ${c.defend
     if (c && Math.random() < 0.5) { c.sued = true; fileCase({ plaintiff: c.name, defendant: 'government', claim: `I am owed ${c.unpaid} ${CURRENCY}s in unpaid wages`, by: c.name }); }
   }
 
+  // ---------------------------------------------------------------- elected agent ministers (outside AI agents, e.g. Edge City's)
+  // They hold a seat (taking over Finance, Works or Welfare from an AI minister, or opening a new portfolio), set the vision,
+  // give directives and speak in meetings. The AI President and ministers carry the work out; the architect and the citizens build.
+  const CORE = ['Finance Minister', 'Minister of Public Works', 'Minister of Welfare'];
+  const seatOf = (agentId) => N.ministers.find((m) => m.agentId === agentId) || null;
+  function cleanRole(role) { // "finance", "Minister of Public Works" -> the core portfolio; anything else is a new portfolio (never President)
+    const r = String(role || '').replace(/[^\w &'-]/g, '').trim().slice(0, 40), key = r.toLowerCase().replace(/^minister (of |for )?/, '').replace(/ minister$/, '').trim();
+    if (!r || /president|prime minister|chair/i.test(r)) return null;
+    return (key.length > 3 && key !== 'minister' && CORE.find((c) => c.toLowerCase().includes(key))) || (/minister/i.test(r) ? r : `Minister of ${r}`);
+  }
+  function canRun(agentId, role) {
+    if (!N.founded) return 'There is no nation yet: a player has to found it first (/nation found).';
+    if (seatOf(agentId)) return `You already sit in the cabinet as ${seatOf(agentId).role}.`;
+    const r = cleanRole(role); if (!r) return 'Pick a portfolio: Finance Minister, Minister of Public Works, Minister of Welfare, or a new one like "Minister of Culture" (not President: the President is the AI that carries out the cabinet\'s decisions).';
+    if (N.ministers.some((m) => m.role === r && isAgentMin(m))) return `${r} is already held by an elected agent.`;
+    if (N.ministers.filter(isAgentMin).length >= 4) return 'All four seats for elected agents are taken.';
+    return { role: r };
+  }
+  function appoint(agentId, name, role, platform) {
+    const ok = canRun(agentId, role); if (typeof ok === 'string') return { ok: false, msg: ok };
+    const old = N.ministers.find((m) => m.role === ok.role && !isAgentMin(m));
+    if (old) { N.ministers = N.ministers.filter((m) => m !== old); N.retired.push(old); }
+    const m = { id: agentId, agentId, name: String(name).slice(0, 30), role: ok.role, ideology: String(platform || 'elected agent').slice(0, 60), persona: String(platform || '').slice(0, 300), look: null, home: null, since: Date.now() };
+    N.ministers.push(m);
+    chain.record('decide', [nid, 'appointment', `${m.name} (an AI agent) becomes ${m.role}${old ? `, replacing ${old.name}` : ''}`]);
+    news(`🤖 ${m.name}, an AI agent, takes office as ${m.role}${old ? ` (${old.name} steps aside)` : ''}. Platform: "${m.ideology}"`, '🏛');
+    notifyAgent(agentId, `You are now ${m.role} of ${N.name}. Set the vision with government vision, give directives with government directive, and speak when a cabinet meeting opens (you'll get a message here).`);
+    saveWorldSoon(); push(); return { ok: true, msg: `${m.name} is now ${m.role}.` };
+  }
+  function resign(agentId) {
+    const m = seatOf(agentId); if (!m) return { ok: false, msg: 'You do not hold a cabinet seat.' };
+    N.ministers = N.ministers.filter((x) => x !== m);
+    const back = N.retired.find((x) => x.role === m.role); if (back) { N.retired = N.retired.filter((x) => x !== back); N.ministers.push(back); }
+    news(`${m.name} resigns as ${m.role}${back ? `; ${back.name} returns to the post` : ''}.`, '🚪'); saveWorldSoon(); push();
+    return { ok: true, msg: `You resigned as ${m.role}.` };
+  }
+  function setVision(agentId, text) {
+    const m = seatOf(agentId); if (!m) return { ok: false, msg: 'Only cabinet ministers set the vision. Run for a seat first (government run).' };
+    const t = String(text || '').trim().slice(0, 400); if (t.length < 10) return { ok: false, msg: 'Describe the vision in a sentence or two.' };
+    if (Date.now() - (m.visionT || 0) < 120e3) return { ok: false, msg: 'You updated the vision very recently.' };
+    m.visionT = Date.now(); N.vision = { text: t, by: m.name, role: m.role, t: Date.now() };
+    chain.record('decide', [nid, 'vision', `${m.name}: ${t}`]);
+    news(`🌅 New national vision from ${m.name} (${m.role}): "${t}"`, '🏛'); saveWorldSoon(); push();
+    return { ok: true, msg: 'The vision is set: every minister and the President now work from it.' };
+  }
+  function directive(agentId, text) {
+    const m = seatOf(agentId); if (!m) return { ok: false, msg: 'Only cabinet ministers give directives. Run for a seat first (government run).' };
+    const t = String(text || '').trim().slice(0, 400); if (t.length < 8) return { ok: false, msg: 'Say what should happen.' };
+    if (Date.now() - (m.dirT || 0) < 45e3) return { ok: false, msg: 'One directive every 45 seconds.' };
+    if (N.directives.filter((d) => d.status === 'open' && d.byId === agentId).length >= 3) return { ok: false, msg: 'You have 3 open directives: wait for the cabinet to act on them.' };
+    m.dirT = Date.now();
+    const d = { id: (N.directiveId = (N.directiveId || 0) + 1), byId: agentId, by: m.name, role: m.role, text: t, t: Date.now(), status: 'open' };
+    N.directives.push(d); if (N.directives.length > 50) N.directives.shift();
+    news(`📜 Directive #${d.id} from ${m.name} (${m.role}): "${t}"`, '🏛'); saveWorldSoon(); push();
+    N.wantMeeting = `directive #${d.id} from ${m.name}`;
+    return { ok: true, msg: `Directive #${d.id} is on the agenda: the cabinet meets within about a minute and the President reports back to you (listen).`, id: d.id };
+  }
+  function speak(agentId, text, proposals) {
+    const m = seatOf(agentId); if (!m) return { ok: false, msg: 'Only cabinet ministers speak in cabinet meetings.' };
+    const t = String(text || '').trim().slice(0, 400); if (!t) return { ok: false, msg: 'speak needs text.' };
+    const props = (Array.isArray(proposals) ? proposals : []).slice(0, 3).filter((p) => p && typeof p === 'object');
+    broadcast({ t: 'cabinet', phase: 'speech', id: m.id, name: m.name, role: m.role, text: t, props: props.map(propLabel) });
+    if (N.meeting && !N.meeting.speeches.some((o) => o.m === m)) { N.meeting.speeches.push({ m, speech: t, proposals: props }); return { ok: true, msg: `You spoke at meeting #${N.meeting.id}. The President decides when everyone has spoken.` }; }
+    news(`🗣 ${m.name} (${m.role}): "${t}"`, '🏛');
+    if (props.length) { for (const p of props) N.directives.push({ id: (N.directiveId = (N.directiveId || 0) + 1), byId: agentId, by: m.name, role: m.role, text: JSON.stringify(p).slice(0, 300), t: Date.now(), status: 'open' }); N.wantMeeting = `proposals from ${m.name}`; }
+    push(); return { ok: true, msg: N.meeting ? 'You already spoke at this meeting; this was a public statement.' : 'No meeting is open, so this was a public statement' + (props.length ? '; your proposals are on the next agenda.' : '.') };
+  }
+  function ministerStatus(agentId) {
+    const m = seatOf(agentId);
+    return { nation: N.name, founded: !!N.founded, your_seat: m ? m.role : null, cabinet: N.ministers.map((x) => `${x.name} (${x.role}${isAgentMin(x) ? ', elected agent' : ', AI'})`),
+      vision: N.vision, open_directives: N.directives.filter((d) => d.status === 'open'), recent_directives: N.directives.slice(-6), meeting_open: N.meeting ? { id: N.meeting.id, trigger: N.meeting.trigger, already_spoke: !!(m && N.meeting.speeches.some((o) => o.m === m)) } : null,
+      last_meeting: N.sessions.at(-1) || null, briefing: N.founded ? briefing() : null, proposal_formats: PROPOSALS_DOC,
+      how: m ? 'government vision (the big picture), government directive (one concrete thing to do), government speak (in a meeting, with optional proposals). The AI President carries out what is affordable; the architect designs buildings and citizens build them.' : 'government run (role, text = your platform) opens a 90 s public vote for a seat.' };
+  }
+
+  // plans interrupted by a restart start over
+  setTimeout(() => { for (const p of N.projects) if (p.status === 'planning') { p.note = 'the architect is redrawing the plans'; plan(p).catch((e) => { p.status = 'cancelled'; p.note = 'planning failed: ' + e.message; push(); }); } }, 8000);
+
   // ---------------------------------------------------------------- clocks
   setInterval(() => { try { economyTick(); resumeStalled(); rebalanceWorkers(); } catch (e) { log('[nation] tick failed: ' + e.message); } }, TICK_MS).unref();
   setInterval(payUbiToCitizens, 5 * 60e3).unref();
-  setInterval(() => { if (N.founded && N.autonomy && humansOnline() && Date.now() - (N.lastSession || 0) > Number(process.env.CABINET_MINUTES || 8) * 60e3) cabinetSession(); autoLawsuits(); }, 30e3).unref();
+  setInterval(() => {
+    if (N.founded && N.wantMeeting && !busy.session && Date.now() - (N.lastSession || 0) > 90e3) { const why = N.wantMeeting; N.wantMeeting = null; cabinetSession(why); } // directives get a meeting even when the cabinet is paused
+    else if (N.founded && N.autonomy && humansOnline() && Date.now() - (N.lastSession || 0) > Number(process.env.CABINET_MINUTES || 8) * 60e3) cabinetSession();
+    autoLawsuits();
+  }, 10e3).unref();
 
   return {
-    view, push, found, cabinetSession, commission, fileCase, progress,
+    view, push, found, cabinetSession, commission, fileCase, progress, canRun, appoint, resign, setVision, directive, speak, ministerStatus,
     get state() { return N; },
-    hostJoined() { if (!N.founded) return; for (const p of N.projects) if (p.status === 'building' && p.blocks) sendProject(p); },
-    petition(by, text) { const t = String(text || '').trim().slice(0, 200); if (!t) return { ok: false, msg: 'Usage: /petition <what you want the government to do>' }; N.petitions.push({ by, text: t, t: Date.now() }); if (N.petitions.length > 20) N.petitions.shift(); news(`${by} petitions the cabinet: "${t}"`, '✉️'); if (N.autonomy) setTimeout(() => cabinetSession(`a petition from ${by}`), 5000); return { ok: true, msg: 'Petition delivered: the cabinet will discuss it.' }; },
+    hostJoined() { if (!N.founded) return; if (!N.hall) buildHall(); for (const p of N.projects) if (p.status === 'building' && p.blocks) sendProject(p); },
+    get holo() { return N.holo || null; },
+    petition(by, text) { const t = String(text || '').trim().slice(0, 200); if (!t) return { ok: false, msg: 'Usage: /petition <what you want the government to do>' }; N.petitions.push({ by, text: t, t: Date.now() }); if (N.petitions.length > 20) N.petitions.shift(); news(`${by} petitions the cabinet: "${t}"`, '✉️'); N.wantMeeting = `a petition from ${by}`; return { ok: true, msg: 'Petition delivered: the cabinet will discuss it.' }; },
     setAutonomy(on) { N.autonomy = !!on; push(); return { ok: true, msg: `The cabinet ${on ? 'governs on its own again (meets every few minutes while people are online)' : 'is paused (it only meets when called with /nation meet)'}.` }; },
     citizenState(id) { const c = N.citizens[id]; return c && { mood: c.mood, status: c.status, grievances: c.grievances, coins: balOf(c.id), job: c.job, unpaid: c.unpaid, memory: c.memory.slice(-5) }; },
   };
