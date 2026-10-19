@@ -2403,11 +2403,11 @@ function breakBlock(hit, drops) {
   wear(sel); foodEx += 0.005;
 }
 function secondaryAction() { // right click: interact, open stations, equip armour, eat, use items, place
-  const slot = inv[sel], sneak = held('sprint');
-  if (player.riding) { if (nowS() - player.rideT > 0.4) dismount(); return; }
-  if (lookEnt && rideOf(lookEnt) && !sneak && mount(lookEnt)) return;
-  if (lookEnt && lookEnt.def.on?.interact && !sneak) { fireEvent(lookEnt, 'interact', { target: player, source: player, byPlayer: true }); track('interact', lookEnt.type); return; }
-  if (lookBlk && !sneak) {
+  const slot = inv[sel], sneak = held('sprint'), riding = !!player.riding;
+  if (riding && !(slot?.kind === 'item' && DEFS.item[slot.key]?.use)) { if (nowS() - player.rideT > 0.4) dismount(); return; } // empty-handed: get off; holding a usable item (a keyfob, a horn…): use it
+  if (!riding && lookEnt && rideOf(lookEnt) && !sneak && mount(lookEnt)) return;
+  if (!riding && lookEnt && lookEnt.def.on?.interact && !sneak) { fireEvent(lookEnt, 'interact', { target: player, source: player, byPlayer: true }); track('interact', lookEnt.type); return; }
+  if (!riding && lookBlk && !sneak) {
     const b = BLOCKS[lookBlk.id], st = b.def?.station;
     if (st) { openInventory(st === 'furnace' ? 'furnace' : 'table', { station: normKey(st), pos: [lookBlk.x, lookBlk.y, lookBlk.z], name: b.name }); return; }
     if (b.def?.on?.interact) { const ref = blockRef(lookBlk.x, lookBlk.y, lookBlk.z); runActions(b.def.on.interact, { self: ref, target: player, pos: ref.pos, vars: {}, byPlayer: true }); return; }
@@ -2491,7 +2491,7 @@ function mount(e) {
   } else netSend({ t: 'ride', eid: e.id, on: 1 });
   player.riding = e; player.rideT = nowS(); player.vel = { x: 0, y: 0, z: 0 }; player._sneakWas = true;
   const fly = !!(r.fly ?? e.flying);
-  toast(`🐎 Riding ${e.name}: WASD steer${fly ? ' (look up/down to climb/dive)' : ''} · ${keyName(KB.jump)} ${fly ? 'up' : 'jump'} · ${keyName(KB.sprint)} ${fly ? 'down' : 'get off'} · right-click get off`);
+  toast(`🐎 Riding ${e.name}: WASD steer${fly ? ' (look up/down to climb/dive)' : ''} · ${keyName(KB.jump)} ${fly ? 'up' : 'jump'} · ${keyName(KB.sprint)} ${fly ? 'down' : 'get off'} · right-click with an empty hand to get off (held items still work)`);
   track('ride', e.type);
   return true;
 }

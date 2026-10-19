@@ -107,8 +107,32 @@ function recordUsage(role, model, cost, inTok, outTok, extra) {
   console.log(`[ai] ${role} ${model} ${extra} in=${inTok} out=${outTok} cost=$${cost.toFixed(4)} total=$${usage.spentUsd.toFixed(3)}`);
 }
 
+// The model's JSON is usually valid, but long plans sometimes carry a slip: a // comment, a trailing comma, a raw newline
+// inside a string, prose around the object. Repair those before giving up.
+function parseLooseJSON(text) {
+  const raw = String(text || '').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+  try { return JSON.parse(raw); } catch {}
+  const a = raw.indexOf('{'), b = raw.lastIndexOf('}'), body = a >= 0 && b > a ? raw.slice(a, b + 1) : raw;
+  let out = '', inStr = false, esc = false;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i], nx = body[i + 1];
+    if (inStr) {
+      if (esc) { esc = false; out += ch; continue; }
+      if (ch === '\\') { esc = true; out += ch; continue; }
+      if (ch === '"') { inStr = false; out += ch; continue; }
+      out += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch === '\t' ? '\\t' : ch; continue;
+    }
+    if (ch === '"') { inStr = true; out += ch; continue; }
+    if (ch === '/' && nx === '/') { while (i < body.length && body[i] !== '\n') i++; continue; }
+    if (ch === '/' && nx === '*') { i = body.indexOf('*/', i + 2); if (i < 0) break; i++; continue; }
+    out += ch;
+  }
+  out = out.replace(/,(\s*[}\]])/g, '$1');
+  return JSON.parse(out); // throws if it is still broken
+}
+
 // Gemini (Interactions API). JSON mode instead of tools: one request, one JSON plan back. images = base64 JPEGs (sandbox previews).
-async function callGemini(role, prompt, context, images = []) {
+async function callGemini(role, prompt, context, images = [], retried = false) {
   const model = role === 'agent' ? AGENT_MODEL : MODEL;
   const text = userText(role, prompt, context);
   const it = await gemini.interactions.create({
@@ -127,9 +151,12 @@ async function callGemini(role, prompt, context, images = []) {
   if (it.status !== 'completed') {
     return { message: it.status === 'incomplete' ? 'That was too big for one go (hit the output limit). Try something smaller or in parts.' : `The AI stopped early (${it.status}). Try again!`, actions: [], cost };
   }
-  const raw = String(it.output_text || '').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
   let out;
-  try { out = JSON.parse(raw); } catch { return { message: 'The AI sent back broken JSON. Try again.', actions: [], cost }; }
+  try { out = parseLooseJSON(it.output_text); } catch (e) {
+    console.warn(`[ai] unparseable JSON from ${model} (${String(it.output_text || '').length} chars): ${e.message}`);
+    if (!retried) { const again = await callGemini(role, prompt, context, images, true); again.cost = (again.cost || 0) + cost; return again; } // one more try
+    return { message: 'The AI sent back broken JSON twice. Try rephrasing, or ask for it in smaller parts.', actions: [], cost };
+  }
   if (Array.isArray(out)) out = { message: '', actions: out };
   if (out?.ok === true && !out.actions?.length) return { ok: true, message: String(out.message || ''), actions: [], cost }; // a review that found nothing to fix
   if (!out || !Array.isArray(out.actions)) return { message: String(out?.message || 'The AI made no changes.'), actions: [], cost };
@@ -139,7 +166,7 @@ async function callGemini(role, prompt, context, images = []) {
 // The nation's people (citizens, ministers, the judge) answer in plain JSON, not the action language.
 const NATION_SYSTEM = `You are the simulation engine behind the citizens, ministers and judge of a nation inside PromptCraft, a multiplayer voxel game. Each request says who you are playing and exactly what JSON to return. Stay in character, be concrete and brief, keep it playful and PG. The currency is a mock in-game token with no real-world value. Reply with JSON only.`;
 async function callJSON(prompt, { effort, cheap } = {}) {
-  const model = cheap ? AGENT_MODEL : MODEL, level = effort || (cheap ? AGENT_EFFORT : EFFORT), parse = (t) => { try { return JSON.parse(String(t || '').trim().replace(/^```(?:json)?\s*|\s*```$/g, '')); } catch { return null; } };
+  const model = cheap ? AGENT_MODEL : MODEL, level = effort || (cheap ? AGENT_EFFORT : EFFORT), parse = (t) => { try { return parseLooseJSON(t); } catch { return null; } };
   if (PROVIDER === 'gemini') {
     const it = await gemini.interactions.create({ model, system_instruction: NATION_SYSTEM, input: prompt, generation_config: { thinking_level: level, max_output_tokens: 16000 }, response_format: { type: 'text', mime_type: 'application/json' }, store: false }, { timeout: 5 * 60e3 });
     const u = it.usage || {}, p = priceOf(model), input = u.total_input_tokens || 0, cached = Math.min(u.total_cached_tokens || 0, input), output = (u.total_output_tokens || 0) + (u.total_thought_tokens || 0);
