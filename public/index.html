@@ -4661,6 +4661,7 @@ function renderNation() {
     const cs = n.citizens, avg = (f) => cs.reduce((s, c) => s + f(c), 0) / Math.max(1, cs.length);
     body = `<div class="ngrid"><div><b>Treasury</b><br>${n.treasury.toLocaleString()} ${esc(n.currency)}</div><div><b>Food price</b><br>${n.economy.foodPrice} (×${n.economy.cpi})</div><div><b>Mood</b><br>${moodFace(avg((c) => c.mood))} ${Math.round(avg((c) => c.mood) * 100)}%</div><div><b>Trust in gov't</b><br>${Math.round(avg((c) => c.trust) * 100)}%</div></div>
       <p>${ch?.ready ? `⛓ Money is a mock ERC20 on a ${esc(ch.network)} (chain ${ch.chainId}); every wage, tax and purchase is an on-chain move in the vault ${esc((ch.vault || '').slice(0, 10))}…` : '⛓ chain starting…'}</p>
+      ${n.capital ? `<p>📍 Capital at ${n.capital.x}, ${n.capital.y}, ${n.capital.z} · go there: <code>/tp ${n.capital.x} ${n.capital.y + 2} ${n.capital.z}</code></p>` : ''}
       <p><b>Laws:</b> ${Object.entries(n.laws).map(([k, v]) => `${esc(k)} ${v}`).join(' · ')}</p>
       ${n.protest ? `<p class="nwarn">📢 Protest at the town hall: ${esc(n.protest.grievances.join('; '))}</p>` : ''}
       <p><b>News</b></p><div class="nnews">${n.news.slice().reverse().map((x) => `<div>${esc(x.text)}</div>`).join('')}</div>
@@ -4671,7 +4672,7 @@ function renderNation() {
     const s = n.sessions[n.sessions.length - 1];
     body = `<p>${n.ministers.map((m) => `<b>${esc(m.name)}</b> · ${esc(m.role)} <small>(${esc(m.ideology)})</small>`).join('<br>')}</p>` + (s ? `<p><b>Last meeting</b> (${esc(s.trigger)}):</p>${s.speeches.map((x) => `<p>🗣 <b>${esc(x.name)}</b>: ${esc(x.text)}</p>`).join('')}<p>✅ ${esc(s.decisions.join(' · ') || 'no changes')}</p><p><i>${esc(s.announcement || '')}</i></p>` : '<p>No meetings yet.</p>');
   } else if (natTab === 'projects') {
-    body = n.projects.length ? n.projects.slice().reverse().map((p) => `<p><b>#${p.id} ${esc(p.name)}</b> <small>${esc(p.purpose || '')}</small><br>${esc(p.status)}${p.total ? ` · ${p.done}/${p.total} blocks ${bar(p.done / p.total, '#fc4')}` : ''} · spent ${p.spent}/${p.budget} · ${p.workers.length} workers${p.note ? `<br><small>${esc(p.note)}</small>` : ''}</p>`).join('') : '<p>No public works yet.</p>';
+    body = n.projects.length ? n.projects.slice().reverse().map((p) => `<p><b>#${p.id} ${esc(p.name)}</b> <small>${esc(p.purpose || '')}${p.site ? ` · at ${p.site.x}, ${p.site.z} (/tp ${p.site.x} ${p.site.y + 4} ${p.site.z + 12})` : ''}</small><br>${esc(p.status)}${p.total ? ` · ${p.done}/${p.total} blocks ${bar(p.done / p.total, '#fc4')}` : ''} · spent ${p.spent}/${p.budget} · ${p.workers.length} workers${p.note ? `<br><small>${esc(p.note)}</small>` : ''}</p>`).join('') : '<p>No public works yet.</p>';
   } else if (natTab === 'court') {
     body = `<p>Judge: <b>${esc(n.judge?.name || '')}</b>. Bring a case: <code>/sue name claim</code> (or "government").</p>` + (n.cases.length ? n.cases.slice().reverse().map((c) => `<p>⚖️ <b>#${c.id} ${esc(c.plaintiff)} v ${esc(c.defendant)}</b>: "${esc(c.claim)}"<br>${c.verdict ? `${esc(c.verdict)}: ${esc(c.reasoning || '')}${c.remedy && c.remedy !== 'none' ? ` · ${esc(c.remedy)}` : ''}` : 'being heard…'}</p>`).join('') : '<p>No cases yet.</p>');
   }
