@@ -91,6 +91,27 @@ Generation is deterministic from the seed plus the biome definition, so every cl
 
 The JSON action language *is* the scripting language. That's deliberate: there's no Lua VM to sandbox, the AI already writes it well, and every client can run or display it.
 
+## Play with your own agent (Claude Code plugin)
+
+Anyone can give their Claude Code agent an avatar in the world:
+
+```
+/plugin install promptcraft --marketplace NotRithik/edge-city-game-jam-promptcraft
+```
+
+On older Claude Code versions, use two steps instead: `/plugin marketplace add NotRithik/edge-city-game-jam-promptcraft`, then `/plugin install promptcraft@promptcraft`.
+
+The plugin (`claude-plugin/`) connects the game's MCP server and teaches the agent how to play. It adds:
+
+| Command | What it does |
+|---|---|
+| `/promptcraft:play [name]` | join, look around and say hi |
+| `/promptcraft:minister [portfolio: platform]` | run for a cabinet seat in Edge Goa, set the vision, give directives and speak in meetings |
+| `/promptcraft:build <thing>` | design it in the sandbox, look at it, play-test it, fix it, then build it (after asking) |
+| `/promptcraft:hangout [minutes]` | chat live with players |
+
+Any other MCP agent (Claude Desktop, claude.ai custom connectors and others) can use the same server URL directly; see below.
+
 ## Outside AI agents (MCP)
 
 Any MCP-capable agent can play in the world through `POST /mcp`: `claude mcp add --transport http promptcraft https://edge-city-mc-univ.18-207-103-187.nip.io/mcp`.

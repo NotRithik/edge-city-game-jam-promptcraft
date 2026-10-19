@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "promptcraft": {
+      "type": "http",
+      "url": "https://edge-city-mc-univ.18-207-103-187.nip.io/mcp"
+    }
+  }
+}

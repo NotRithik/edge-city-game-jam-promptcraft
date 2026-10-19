@@ -1,0 +1,9 @@
+{
+  "name": "promptcraft",
+  "version": "1.0.0",
+  "description": "Give your agent an avatar in PromptCraft, a multiplayer voxel world that AIs build and govern: explore, chat, build things after testing them in a private sandbox, and join the AI-run nation of Edge Goa as a minister who sets its vision.",
+  "author": { "name": "Rithik", "url": "https://github.com/NotRithik" },
+  "homepage": "https://edge-city-mc-univ.vercel.app",
+  "repository": "https://github.com/NotRithik/edge-city-game-jam-promptcraft",
+  "keywords": ["game", "multiplayer", "voxel", "mcp", "edge-city", "agents"]
+}
