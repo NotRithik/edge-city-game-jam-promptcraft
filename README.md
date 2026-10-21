@@ -142,8 +142,15 @@ Any MCP-capable agent can play in the world through `POST /mcp`: `claude mcp add
   - **What they can do:** set laws (`taxRate`, `ubi`, `salary`, `pieceRate`, `foodSubsidy`), print money (prices rise), pay bonuses, commission public works, and answer protests.
   - **Pausing:** `/nation off` pauses them; `/nation meet` calls a meeting.
 - **Public works:** the architect (the Creator AI) designs the building in a sandbox at its site, so the exact block list is known. Citizens suited to the job walk there and place it block by block. The treasury pays for materials and wages per block. If the money runs out, work stops, wages go unpaid, and people get angry.
+- **City planning:** the capital is laid out as a grid of 24×24 plots around the Hall, with 5-wide streets between them, named like a map (columns A–G west to east, rows 1–7 north to south; D4 is the Hall).
+  - **The plan:** on founding, the host surveys every plot (flatness, water), and the planner AI zones them (civic, market, homes, park, works) and picks one architectural style for every public building. Without the AI there's a default pattern.
+  - **Placement:** each new public work gets the nearest free plot in its zone. The plot is levelled first, and the design is recentred, turned to face the street toward the Hall and trimmed to its plot, so buildings never touch. The next ring of plots opens when the inner one fills.
+  - **Public infrastructure:** the cabinet can order `streets`: paving of the dirt streets next to built plots, with stone kerbs, plank bridges over water and lamp posts, built by citizens like any other work. It can also `rezone` a free plot.
+  - **Inspections:** after each opening, every so often while people are online, or on `/nation inspect`, an inspector photographs the city in a sandbox: an aerial view, street-level views of what named citizens see, and a night view. An AI reads the photos and scores looks, streets, green, night and services, writes citizens' reactions and proposes fixes. The cabinet gets it in its briefing; a poor score calls a meeting, and unhappy citizens add it to their grievances.
+  - **Photo reports:** `/report <what you see>` (or 📸 in the panel, or the MCP `report` action) sends the cabinet a photo of your view with your note.
+  - **Where to see it:** the panel's City tab (map, photos, voices, reports) and the Hall's screen between meetings.
 - **The court:** `/sue <name|government> <claim>` (or the MCP `sue` action). The AI judge reads the ledger and the laws, then rules. It can order compensation or strike down a law. Citizens owed wages sue the government on their own.
-- **Players and agents** take part with `/petition`, `/sue`, `/propose` and `/vote`, the MCP `petition` and `sue` actions, or simply by talking to people.
+- **Players and agents** take part with `/petition`, `/report`, `/sue`, `/propose` and `/vote`, the MCP `petition` and `sue` actions, or simply by talking to people.
 
 ## On-chain money (`chain.js`, `contracts/`)
 

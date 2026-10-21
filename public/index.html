@@ -152,6 +152,8 @@ input[type=range]::-moz-range-thumb{width:10px;height:20px;background:#8b8b8b;bo
 .ngrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:6px 0}.ngrid>div{background:rgba(255,255,255,.06);padding:6px 8px}
 .nbar{display:inline-block;width:70px;height:8px;background:#333;vertical-align:middle}.nbar i{display:block;height:100%}
 .ntable{width:100%;border-collapse:collapse;font-size:14px}.ntable td,.ntable th{padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;vertical-align:top}
+.citywrap{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}#citymap{max-width:100%;border:1px solid #555}.citylegend{flex:1;min-width:160px;font-size:13px}.citylegend span{display:inline-block;margin:0 8px 3px 0}.citylegend i{display:inline-block;width:10px;height:10px;margin-right:4px;vertical-align:middle}
+.cityphotos{display:flex;gap:6px;flex-wrap:wrap}.cityphotos figure{margin:0;width:calc(50% - 3px)}.cityphotos img{width:100%;display:block;border-radius:4px}.cityphotos figcaption{font-size:12px;opacity:.8}
 .nnews{max-height:180px;overflow:auto;font-size:14px;background:rgba(0,0,0,.25);padding:6px}.nnews div{margin:2px 0}.nwarn{color:#ffb38a}
 @media (max-width:640px){.ngrid{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:820px),(max-height:680px){#inv,#cursor{--u:2px}}
@@ -3435,7 +3437,7 @@ function closePrompt(relock = true) { $('#promptbar').style.display = 'none'; $(
 const CMDS = {
   help: '', tutorial: '', hints: 'on|off', gamemode: 'survival|creative', give: '<item> [count]', spawn: '<creature> [count]', tp: '<x> <y> <z> | spawn', kill: '(respawn)', suicide: '(respawn)', time: 'day|night|sunset|storm', fly: '', undo: '', killall: '(monsters + wildlife)',
   ai: '<prompt>', region: '[theme]', regions: '', warp: '<region>', minds: 'on|off', agents: 'on|off', gov: '', propose: '<law> <value>', vote: '<id> yes|no', bank: '', grant: '<name> <amount>',
-  nation: '[found|meet|on|off]', petition: '<what the cabinet should do>', sue: '<name|government> <claim>',
+  nation: '[found|meet|inspect|on|off]', petition: '<what the cabinet should do>', report: '<what you see and what should change> (sends the cabinet a photo of your view)', sue: '<name|government> <claim>',
   pay: '<name> <amount> [memo]', bal: '', who: '', rd: '<2-16>', def: '<key>', name: '<new name>', new: '',
 };
 const sug = { list: [], i: 0, start: 0, token: '', usage: '', cycle: null }, chatHist = [];
@@ -3542,7 +3544,7 @@ function command(v) {
   track('cmd', normKey(cmd));
   const p = player.pos;
   switch (cmd) {
-    case 'region': case 'regions': case 'warp': case 'minds': case 'gov': case 'propose': case 'vote': case 'bank': case 'grant': case 'nation': case 'petition': case 'sue': regionCommand(cmd, a); break;
+    case 'region': case 'regions': case 'warp': case 'minds': case 'gov': case 'propose': case 'vote': case 'bank': case 'grant': case 'nation': case 'petition': case 'report': case 'sue': regionCommand(cmd, a); break;
     case 'help': chatLine('Chat goes to everyone · <b>@Creator</b> makes things · <b>@Name</b> talks to an AI or pings a player · Tab completes. Commands: ' + Object.entries(CMDS).map(([c, u]) => esc(`/${c}${u ? ' ' + u : ''}`)).join(' · '), 'sys'); break;
     case 'ai': askAI(a.join(' ')); break;
     case 'spawn': for (let i = 0; i < clamp(+a[1] || 1, 1, 30); i++) { const at = { x: p.x + rnd(-2, 2), y: p.y + 0.5, z: p.z + rnd(-2, 2) + 3 }; if (isHost()) spawnEntity(a[0], at); else netSend({ t: 'spawn', type: normKey(a[0]), pos: P3(at) }); } break;
@@ -3886,7 +3888,7 @@ function viewContext(e) { // Creator context for an agent's "create" request, se
 }
 function hostAgentOp(m) {
   const reply = (ok, msg, data) => netSend({ t: 'agentres', rid: m.rid, ok, msg, data });
-  if (['found', 'project', 'projectStatus', 'hall'].includes(m.op)) { try { return hostNationOp(m, reply); } catch (err) { return reply(false, String(err?.message || err)); } }
+  if (['found', 'project', 'projectStatus', 'hall', 'survey', 'streets'].includes(m.op)) { try { return hostNationOp(m, reply); } catch (err) { return reply(false, String(err?.message || err)); } }
   try {
     const e = agentAvatar(m.agent || {}); if (!e) return reply(false, 'Could not place your avatar (the world is full of creatures).');
     switch (m.op) {
@@ -4100,6 +4102,7 @@ function regionCommand(cmd, a) {
       break;
     }
     case 'nation': if (!a[0]) { openNation(); break; } if (!net.online) { sysMsg('The nation lives on the multiplayer server.', 'err'); break; } ledgerReq({ t: 'natcmd', cmd: a[0] === 'on' || a[0] === 'off' ? 'autonomy' : a[0], args: a.slice(a[0] === 'on' || a[0] === 'off' ? 0 : 1) }).then((r) => sysMsg((r.ok ? '🏛 ' : '✖ ') + (r.msg || ''), r.ok ? 'sys' : 'err')); break;
+    case 'report': if (!a.length) { sysMsg('Usage: /report <what you see and what should change>: the cabinet gets a photo of your view with it.', 'err'); break; } sendReport(a.join(' ')); break;
     case 'petition': case 'sue': if (!net.online) { sysMsg('The nation lives on the multiplayer server.', 'err'); break; } ledgerReq({ t: 'natcmd', cmd: cmd, args: a }).then((r) => sysMsg((r.ok ? '🏛 ' : '✖ ') + (r.msg || ''), r.ok ? 'sys' : 'err')); break;
     case 'grant': ledgerReq({ t: 'grant', to: a[0], amount: +a[1], memo: a.slice(2).join(' ') }).then((r) => sysMsg((r.ok ? '🏛 ' : '✖ ') + (r.msg || ''), r.ok ? 'sys' : 'err')); break;
   }
@@ -4483,7 +4486,10 @@ function sbDo(st, shots) {
     case 'goto': {
       if (st.entity != null) { const e = sbFind(st.entity); if (!e) throw new Error(`no creature "${st.entity}" here`); const r = e.w / 2 + 2.5, f = facing(e); player.pos.x = e.pos.x + f.x * r; player.pos.z = e.pos.z + f.z * r; player.pos.y = e.pos.y + 0.1; sbMesh(player.pos.x, player.pos.z); while (collides(player.pos.x, player.pos.y, player.pos.z, player.w, player.h) && player.pos.y < WH) player.pos.y += 1; sbLookAt(e.center()); }
       else if (st.at === 'site' || st.at == null) sbPose(SB.site);
-      else { const [x, y, z] = arr(st.at).map(Number); Object.assign(player.pos, { x, y, z }); sbMesh(x, z); }
+      else {
+        const [x, y, z] = arr(st.at).map(Number); Object.assign(player.pos, { x, y, z }); sbMesh(x, z);
+        if (st.settle) { const P = player.pos; while (collides(P.x, P.y, P.z, player.w, player.h) && P.y < WH) P.y += 1; for (let i = 0; i < 40 && P.y > 1 && !collides(P.x, P.y - 1, P.z, player.w, player.h); i++) P.y -= 1; }
+      }
       if (player.riding) dismount();
       player.vel = { x: 0, y: 0, z: 0 }; sbStep(0.3); updateTargeting(); break;
     }
@@ -4644,7 +4650,37 @@ function hostNationOp(m, reply) {
       for (const [id, st] of Object.entries(old?.ws || {})) { if (keep.has(id)) ws[id] = st; else if (st.target >= 0) retry.push(st.target); } // reassigned workers hand their block back
       NAT.projects.set(p.id, { ...p, next: Math.max(p.from || 0, old?.next || 0), ws, retry, workers: p.workers || [] });
       ensureArea(p.site.x, p.site.z);
-      return reply(true, 'building');
+      if (p.prep) { // level the plot first (instantly, so no worker's block gets cleared)
+        const q = p.prep; ensureArea(q.x0 + q.size / 2, q.z0 + q.size / 2);
+        startBuild([{ op: 'flatten', from: [0, 0, 0], to: [q.size - 1, 0, q.size - 1], block: 'grass', clear: 24, depth: 4 }], { x: q.x0, y: q.ground, z: q.z0 }, { instant: true });
+      }
+      return reply(true, 'building', { prepped: !!p.prep });
+    }
+    case 'survey': { // how flat and how wet each city plot is, and the ground level it would be levelled to
+      const S = m.size || 24, out = {};
+      for (const p of m.plots || []) {
+        ensureArea(p.x0 + S / 2, p.z0 + S / 2); const hs = []; let wet = 0;
+        for (let z = p.z0 + 1; z < p.z0 + S; z += 3) for (let x = p.x0 + 1; x < p.x0 + S; x += 3) { const h = surfaceY(x, z); hs.push(h); if (h < SEA) wet++; }
+        hs.sort((a, b) => a - b); out[p.id] = { ground: Math.max(hs[hs.length >> 1], SEA) + 1, rough: hs[hs.length - 1] - hs[0], wet: Math.round((wet / hs.length) * 100) / 100 };
+      }
+      return reply(true, 'surveyed', { survey: out });
+    }
+    case 'streets': { // street sections as blocks: cobblestone with stone-brick kerbs, plank bridges over water, lamp posts on the kerbs
+      const out = [];
+      for (const s of m.segs || []) {
+        ensureArea((s.x0 + s.x1) / 2, (s.z0 + s.z1) / 2);
+        const len = s.dir === 'v' ? s.z1 - s.z0 : s.x1 - s.x0;
+        for (let z = s.z0; z <= s.z1; z++) for (let x = s.x0; x <= s.x1; x++) {
+          let y = surfaceY(x, z);
+          while (y > 1 && BLOCKS[getBlock(x, y, z)]?.key === 'log') { out.push([x, y, z, 'air']); y--; } // a tree in the way
+          const wet = y < SEA, top = wet ? SEA : y, kerbA = s.dir === 'v' ? x === s.x0 : z === s.z0, kerbB = s.dir === 'v' ? x === s.x1 : z === s.z1;
+          out.push([x, top, z, wet ? 'planks' : s.dir !== 'x' && (kerbA || kerbB) ? 'stone_bricks' : 'cobblestone']);
+          for (let d = 1; d <= 3; d++) if (getBlock(x, top + d, z)) out.push([x, top + d, z, 'air']);
+          const along = s.dir === 'v' ? z - s.z0 : x - s.x0;
+          if (s.dir !== 'x' && ((kerbA && along === Math.round(len / 4)) || (kerbB && along === Math.round((3 * len) / 4)))) out.push([x, top + 1, z, 'log'], [x, top + 2, z, 'log'], [x, top + 3, z, 'glowstone']);
+        }
+      }
+      return reply(true, 'streets surveyed', { blocks: out });
     }
     case 'hall': { // the Hall of Government, built in code so its seats, bench and screens are where the routines expect them
       const x = Math.floor(m.at.x), z = Math.floor(m.at.z); ensureArea(x, z); ensureArea(x, z + 10);
@@ -4661,7 +4697,7 @@ function onCabinet(m) {
   if (m.phase === 'open') { chatLine(`🏛 <b>The cabinet is in session</b> in the Hall of Government (${esc(m.trigger || '')})`, 'ai'); HALLSTATE.meeting = { trigger: m.trigger, speeches: [] }; }
   if (m.phase === 'speech') (HALLSTATE.meeting ||= { trigger: '', speeches: [] }).speeches.push({ name: m.name, role: m.role, text: m.text, props: m.props || [], president: !!m.president });
   if (m.phase === 'decisions' && HALLSTATE.meeting) { Object.assign(HALLSTATE.meeting, { decisions: m.decisions || [], announcement: m.announcement }); const e = entities.find((x) => x.name === m.president && !x.dead); if (e && m.announcement) speak(e, m.announcement, 10, true, true); }
-  if (m.phase === 'close') { HALLSTATE.last = HALLSTATE.meeting; HALLSTATE.meeting = null; }
+  if (m.phase === 'close') { HALLSTATE.last = HALLSTATE.meeting; if (HALLSTATE.last) HALLSTATE.last.t = Date.now(); HALLSTATE.meeting = null; }
   hallViz.dirty = true;
   if (m.phase === 'speech') {
     chatLine(`🏛 <b>${esc(m.name)}</b> <i>(${esc(m.role)})</i>: ${esc(m.text)}`, 'ai');
@@ -4680,7 +4716,7 @@ function renderNation() {
   if (!net.online) { el.innerHTML = '<p>The nation lives on the multiplayer server. You are offline.</p>'; return; }
   if (!n?.founded) { el.innerHTML = `<p><b>${esc(n?.name || 'Edge Goa')}</b> has not been founded yet.</p><p>Founding invents its first citizens (each with a personality, a job, needs and an on-chain wallet), a cabinet of AI ministers and a judge. They live around a new capital near spawn and start building a town hall.</p><button data-nat="found">🏛 Found the nation</button>`; return; }
   const ch = n.chain || net.chain, bar = (v, c) => `<span class="nbar"><i style="width:${Math.round(clamp(v, 0, 1) * 100)}%;background:${c}"></i></span>`;
-  const tabs = ['overview', 'citizens', 'cabinet', 'projects', 'court'].map((k) => `<button class="ntab${natTab === k ? ' on' : ''}" data-tab="${k}">${k}</button>`).join('');
+  const tabs = ['overview', 'citizens', 'cabinet', 'projects', 'city', 'court'].map((k) => `<button class="ntab${natTab === k ? ' on' : ''}" data-tab="${k}">${k}</button>`).join('');
   let body = '';
   if (natTab === 'overview') {
     const cs = n.citizens, avg = (f) => cs.reduce((s, c) => s + f(c), 0) / Math.max(1, cs.length);
@@ -4691,7 +4727,7 @@ function renderNation() {
       ${n.vision ? `<p>🌅 <b>Vision</b> (${esc(n.vision.by)}): <i>${esc(n.vision.text)}</i></p>` : ''}
       ${n.protest ? `<p class="nwarn">📢 Protest at the town hall: ${esc(n.protest.grievances.join('; '))}</p>` : ''}
       <p><b>News</b></p><div class="nnews">${n.news.slice().reverse().map((x) => `<div>${esc(x.text)}</div>`).join('')}</div>
-      <p><button data-nat="meet">🏛 Call a cabinet meeting</button> <button data-nat="petition">✉️ Petition</button> <button data-nat="sue">⚖️ Sue</button> <button data-nat="autonomy">${n.autonomy ? '⏸ Pause the cabinet' : '▶ Let the cabinet govern'}</button></p>`;
+      <p><button data-nat="meet">🏛 Call a cabinet meeting</button> <button data-nat="petition">✉️ Petition</button> <button data-nat="report">📸 Report what I see</button> <button data-nat="sue">⚖️ Sue</button> <button data-nat="autonomy">${n.autonomy ? '⏸ Pause the cabinet' : '▶ Let the cabinet govern'}</button></p>`;
   } else if (natTab === 'citizens') {
     body = `<table class="ntable"><tr><th></th><th>Citizen</th><th>Job</th><th>Mood</th><th>Trust</th><th>Coins</th><th>Status</th></tr>${n.citizens.map((c) => `<tr title="${esc(c.personality || '')} · wants: ${esc((c.wants || []).join(', '))}"><td>${moodFace(c.mood)}</td><td>${esc(c.name)} <small>${c.age}</small></td><td>${esc(c.occupation)}</td><td>${bar(c.mood, '#7c5')}</td><td>${bar(c.trust, '#59c')}</td><td>${c.coins}</td><td>${esc(c.status)}${c.grievances?.length ? `<br><small>${esc(c.grievances[0])}</small>` : ''}</td></tr>`).join('')}</table><p><small>Talk to anyone with @Name in chat.</small></p>`;
   } else if (natTab === 'cabinet') {
@@ -4702,11 +4738,57 @@ function renderNation() {
       ${n.vision ? `<p>🌅 <b>Vision</b> (${esc(n.vision.by)}, ${esc(n.vision.role)}): <i>${esc(n.vision.text)}</i></p>` : ''}
       ${dirs.length ? `<p><b>Directives</b></p>${dirs.map((d) => `<p>📜 #${d.id} <b>${esc(d.by)}</b>: ${esc(d.text)} <small>· ${esc(d.status)}${d.outcome ? `: ${esc(d.outcome)}` : ''}</small></p>`).join('')}` : ''}` + (s ? `<p><b>Last meeting</b> (${esc(s.trigger)}):</p>${s.speeches.map((x) => `<p>🗣 <b>${esc(x.name)}</b>: ${esc(x.text)}</p>`).join('')}<p>✅ ${esc(s.decisions.join(' · ') || 'no changes')}</p><p><i>${esc(s.announcement || '')}</i></p>` : '<p>No meetings yet.</p>');
   } else if (natTab === 'projects') {
-    body = n.projects.length ? n.projects.slice().reverse().map((p) => `<p><b>#${p.id} ${esc(p.name)}</b> <small>${esc(p.purpose || '')}${p.site ? ` · at ${p.site.x}, ${p.site.z} (/tp ${p.site.x} ${p.site.y + 4} ${p.site.z + 12})` : ''}</small><br>${esc(p.status)}${p.total ? ` · ${p.done}/${p.total} blocks ${bar(p.done / p.total, '#fc4')}` : ''} · spent ${p.spent}/${p.budget} · ${p.workers.length} workers${p.note ? `<br><small>${esc(p.note)}</small>` : ''}</p>`).join('') : '<p>No public works yet.</p>';
+    body = n.projects.length ? n.projects.slice().reverse().map((p) => `<p><b>#${p.id} ${esc(p.name)}</b> <small>${p.plot ? `plot ${esc(p.plot)} (${esc(p.zone || '')}) · ` : ''}${esc(p.purpose || '')}${p.site ? ` · at ${p.site.x}, ${p.site.z} (/tp ${p.site.x} ${p.site.y + 4} ${p.site.z + 12})` : ''}</small><br>${esc(p.status)}${p.total ? ` · ${p.done}/${p.total} blocks ${bar(p.done / p.total, '#fc4')}` : ''} · spent ${p.spent}/${p.budget} · ${p.workers.length} workers${p.note ? `<br><small>${esc(p.note)}</small>` : ''}</p>`).join('') : '<p>No public works yet.</p>';
+  } else if (natTab === 'city') {
+    const C = n.city, R = C?.reports?.[C.reports.length - 1], img = (f) => `${API_BASE}/api/city/${encodeURIComponent(f)}`;
+    body = !C ? '<p>No city plan yet.</p>' : `<p>🗺 <b>Master plan</b>: ${esc(C.plan || 'the planner is surveying the land…')}<br><small>🎨 One style for every public building: ${esc(C.style || '…')}</small></p>
+      <div class="citywrap"><canvas id="citymap" width="406" height="406"></canvas><div class="citylegend">${Object.entries(ZONE_COL).map(([z, c]) => `<span><i style="background:${c}"></i>${z}</span>`).join('')}<span><i style="background:#a3a3a3"></i>paved street</span><span><i style="background:#d2b45a"></i>being paved</span><span><i style="background:#6b4f33"></i>dirt street</span>
+        <p><small>Each building gets its own plot in a zone, levelled and facing the street toward the Hall (#). Bright plots are built or going up; the white dot is you.</small></p>${C.districts?.length ? `<p>${C.districts.map((d) => `<b>${esc(d.name)}</b>: ${esc(d.plots.join(' '))}`).join('<br>')}</p>` : ''}</div></div>
+      ${R ? `<p><b>🏙 City inspection #${R.id}</b> <small>(${esc(R.trigger)}, ${Math.round((Date.now() - R.t) / 60e3)} min ago)</small><br>${Object.entries(R.scores).map(([k, v]) => `${esc(k)} <b>${v}</b>/10`).join(' · ')}</p><p>${esc(R.summary)}</p>
+        <div class="cityphotos">${R.photos.map((p) => `<figure><a href="${img(p.file)}" target="_blank"><img src="${img(p.file)}" loading="lazy" alt=""></a><figcaption>${esc(p.label)}</figcaption></figure>`).join('')}</div>
+        ${R.voices.map((v) => `<p>🗣 <b>${esc(v.name)}</b>: “${esc(v.says)}”</p>`).join('')}${R.issues.length ? `<p>⚠️ ${R.issues.map(esc).join(' · ')}</p>` : ''}` : `<p>No inspection yet. ${C.inspecting ? 'The inspector is out with a camera right now…' : 'The inspector photographs the city every so often and after every opening, and the cabinet reads the report.'}</p>`}
+      ${C.feedback?.length ? `<p><b>📸 Photo reports</b></p>${C.feedback.slice().reverse().map((f) => `<p>${f.photo ? `<a href="${img(f.photo)}" target="_blank">📷</a> ` : ''}<b>${esc(f.by)}</b>: ${esc(f.text)}${f.seen ? `<br><small>${esc(f.seen)}</small>` : ''}</p>`).join('')}` : ''}
+      <p><button data-nat="report">📸 Report what I see</button> <button data-nat="inspect">🔍 Send the inspector</button></p>`;
   } else if (natTab === 'court') {
     body = `<p>Judge: <b>${esc(n.judge?.name || '')}</b>. Bring a case: <code>/sue name claim</code> (or "government").</p>` + (n.cases.length ? n.cases.slice().reverse().map((c) => `<p>⚖️ <b>#${c.id} ${esc(c.plaintiff)} v ${esc(c.defendant)}</b>: "${esc(c.claim)}"<br>${c.verdict ? `${esc(c.verdict)}: ${esc(c.reasoning || '')}${c.remedy && c.remedy !== 'none' ? ` · ${esc(c.remedy)}` : ''}` : 'being heard…'}</p>`).join('') : '<p>No cases yet.</p>');
   }
   el.innerHTML = `<h2>🏛 ${esc(n.name)}</h2><div class="ntabs">${tabs}</div>${body}`;
+  if (natTab === 'city') drawCityMap($('#citymap'), n);
+}
+const ZONE_COL = { civic: '#b48cff', market: '#ffb347', homes: '#6ec6ff', park: '#6fd36f', works: '#c8a27a' };
+function citySegs(p, P, S) { // the street ring around a plot, as [key, x0, z0, x1, z1] (same keys as the server's plan)
+  const { i, j, x0, z0 } = p, x1 = x0 + P - 1, z1 = z0 + P - 1;
+  return [[`v${i},${j}`, x0 - S, z0, x0 - 1, z1], [`v${i + 1},${j}`, x1 + 1, z0, x1 + S, z1], [`h${i},${j}`, x0, z0 - S, x1, z0 - 1], [`h${i},${j + 1}`, x0, z1 + 1, x1, z1 + S],
+    [`x${i},${j}`, x0 - S, z0 - S, x0 - 1, z0 - 1], [`x${i + 1},${j}`, x1 + 1, z0 - S, x1 + S, z0 - 1], [`x${i},${j + 1}`, x0 - S, z1 + 1, x0 - 1, z1 + S], [`x${i + 1},${j + 1}`, x1 + 1, z1 + 1, x1 + S, z1 + S]];
+}
+function drawCityMap(cv, n) {
+  const C = n?.city, D4 = C?.plots.find((p) => p.id === 'D4'); if (!cv || !D4) return;
+  const g = cv.getContext('2d'), P = C.plot, S = C.street, R = Math.max(...C.plots.map((p) => p.ring)), pitch = P + S, k = cv.width / ((2 * R + 1) * pitch + S);
+  const ox = D4.x0 - R * pitch - S, oz = D4.z0 - R * pitch - S, X = (x) => (x - ox) * k, Z = (z) => (z - oz) * k;
+  g.fillStyle = '#1f2b1b'; g.fillRect(0, 0, cv.width, cv.height);
+  const used = C.plots.filter((p) => p.status === 'built' || p.status === 'reserved'), paved = new Set(C.paved), paving = new Set(C.paving || []);
+  for (const p of used) for (const [key, a, b, c, d] of citySegs(p, P, S)) { g.fillStyle = paved.has(key) ? '#a3a3a3' : paving.has(key) ? '#d2b45a' : '#6b4f33'; g.fillRect(X(a), Z(b), (c - a + 1) * k, (d - b + 1) * k); }
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (const p of C.plots) {
+    if (p.ring > C.ring) { g.strokeStyle = 'rgba(255,255,255,.08)'; g.strokeRect(X(p.x0) + 0.5, Z(p.z0) + 0.5, P * k - 1, P * k - 1); continue; }
+    const on = p.status === 'built' || p.status === 'reserved';
+    g.globalAlpha = on ? 1 : 0.28; g.fillStyle = ZONE_COL[p.zone] || '#888'; g.fillRect(X(p.x0), Z(p.z0), P * k, P * k); g.globalAlpha = 1;
+    if (p.status === 'reserved') { g.strokeStyle = '#ffd84d'; g.setLineDash([4, 3]); g.lineWidth = 2; g.strokeRect(X(p.x0) + 1, Z(p.z0) + 1, P * k - 2, P * k - 2); g.setLineDash([]); }
+    g.fillStyle = on ? '#111' : 'rgba(255,255,255,.65)'; g.font = '10px monospace'; g.fillText(p.id === 'D4' ? '#' : p.id, X(p.x0) + 9, Z(p.z0) + 8);
+    if (on) { g.font = 'bold 9px sans-serif'; const words = String(p.name).split(' '); const l1 = words.slice(0, 2).join(' '), l2 = words.slice(2).join(' '); g.fillText(l1.slice(0, 13), X(p.x0 + P / 2), Z(p.z0 + P / 2) - (l2 ? 5 : 0)); if (l2) g.fillText(l2.slice(0, 13), X(p.x0 + P / 2), Z(p.z0 + P / 2) + 6); }
+  }
+  const px = X(player.pos.x), pz = Z(player.pos.z);
+  if (px >= 0 && pz >= 0 && px <= cv.width && pz <= cv.height) { g.fillStyle = '#fff'; g.beginPath(); g.arc(px, pz, 4, 0, Math.PI * 2); g.fill(); g.strokeStyle = '#000'; g.stroke(); }
+}
+function snapView(w = 640) { // a JPEG of what you see right now (the 3D view, without the HUD)
+  try { renderer.render(scene, camera); const src = renderer.domElement, cv = document.createElement('canvas'); cv.width = w; cv.height = Math.round((w * src.height) / src.width); cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height); return cv.toDataURL('image/jpeg', 0.72); } catch { return null; }
+}
+function sendReport(text) { // /report: a photo of your view, with what you say, for the cabinet
+  if (!net.online) return sysMsg('The nation lives on the multiplayer server.', 'err');
+  const img = snapView(), fl = document.createElement('div');
+  fl.style.cssText = 'position:fixed;inset:0;background:#fff;opacity:.75;pointer-events:none;transition:opacity .45s;z-index:99'; document.body.appendChild(fl);
+  requestAnimationFrame(() => requestAnimationFrame(() => { fl.style.opacity = '0'; })); setTimeout(() => fl.remove(), 600);
+  ledgerReq({ t: 'natcmd', cmd: 'report', args: String(text).split(/\s+/), img, where: `${Math.round(player.pos.x)}, ${Math.round(player.pos.z)}` }).then((r) => sysMsg((r.ok ? '📸 ' : '✖ ') + (r.msg || ''), r.ok ? 'sys' : 'err'));
 }
 $('#nation').addEventListener('click', (e) => {
   const b = e.target.closest('[data-nat],[data-tab]');
@@ -4716,6 +4798,8 @@ function natAction(k) {
   const go = (cmd, args = []) => ledgerReq({ t: 'natcmd', cmd, args }).then((r) => { sysMsg((r.ok ? '🏛 ' : '✖ ') + (r.msg || ''), r.ok ? 'sys' : 'err'); renderNation(); });
   if (k === 'found') go('found'); else if (k === 'meet') go('meet'); else if (k === 'autonomy') go('autonomy', [net.nation?.autonomy ? 'off' : 'on']);
   else if (k === 'petition') { const t = prompt('What do you want the cabinet to do?'); if (t) go('petition', t.split(/\s+/)); }
+  else if (k === 'report') { const t = prompt('What do you see here, and what should the government change (or keep)? A photo of your view goes with it.'); if (t) sendReport(t); }
+  else if (k === 'inspect') go('inspect');
   else if (k === 'sue') { const who = prompt('Who are you suing? (a name, or "government")'); if (!who) return; const claim = prompt('Your claim:'); if (claim) go('sue', [who.replace(/\s+/g, '_'), ...claim.split(/\s+/)]); }
 }
 // ---- the Hall of Government: a glass-walled chamber at the capital. Ministers walk in and sit at the council table for
@@ -4823,8 +4907,18 @@ function drawHallScreen() {
   const S = hallViz.screen; if (!S) return;
   const { g, cv } = S, n = net.nation, W = cv.width, H = cv.height, F = "'Pixelify Sans', monospace";
   g.fillStyle = '#0d1424'; g.fillRect(0, 0, W, H); g.strokeStyle = '#3b5a9a'; g.lineWidth = 8; g.strokeRect(4, 4, W - 8, H - 8);
-  let y = 62; const line = (text, size = 30, color = '#e8eefc', maxLines = 2) => { g.font = `${size}px ${F}`; g.fillStyle = color; for (const l of wrapLines(g, text, W - 70, maxLines)) { g.fillText(l, 34, y); y += size * 1.22; } };
-  const C = HALLSTATE.court, M = HALLSTATE.meeting || HALLSTATE.last;
+  let y = 62, maxW = W - 70; const line = (text, size = 30, color = '#e8eefc', maxLines = 2) => { g.font = `${size}px ${F}`; g.fillStyle = color; for (const l of wrapLines(g, text, maxW, maxLines)) { g.fillText(l, 34, y); y += size * 1.22; } };
+  const C = HALLSTATE.court, M = HALLSTATE.meeting || HALLSTATE.last, R = n?.city?.reports?.[n.city.reports.length - 1];
+  if (!C && !HALLSTATE.meeting && R && (!M || R.t > (M.t || 0))) { // a new city inspection beats an old meeting
+    const im = hallPhoto(R.photos[0]?.file), pw = 448, ph = 252, px = W - pw - 30;
+    if (im) { g.drawImage(im, px, 70, pw, ph); g.font = `22px ${F}`; g.fillStyle = '#9fb0d6'; for (const [k, l] of wrapLines(g, R.photos[0].label, pw, 2).entries()) g.fillText(l, px, 70 + ph + 28 + k * 26); }
+    maxW = W - pw - 100;
+    line(`🏙 CITY INSPECTION #${R.id}`, 42, '#ffd84d', 1);
+    line(Object.entries(R.scores).map(([k, v]) => `${k} ${v}/10`).join(' · '), 28, '#7fd4ff', 2);
+    line(R.summary, 28, '#e8eefc', 4);
+    for (const v of R.voices.slice(0, 2)) { if (y > H - 60) break; line(`${v.name.split(' ')[0]}: “${v.says}”`, 26, '#dfe6f7', 3); }
+    S.tex.needsUpdate = true; return;
+  }
   if (C) {
     line(`⚖️ COURT IN SESSION · case #${C.id}`, 46, '#ffd84d', 1); line(`${C.plaintiff} v ${C.defendant}`, 36, '#ffffff', 1); line(`Claim: "${C.claim}"`, 30, '#c9d6ff', 3);
     if (C.verdict) { y += 6; line(`RULING: ${C.verdict}`, 38, C.verdict.includes('plaintiff') ? '#7dff9a' : '#ff9a9a', 1); line(C.reasoning || '', 28, '#e8eefc', 3); if (C.remedy && C.remedy !== 'none') line(`Remedy: ${C.remedy}`, 28, '#ffd84d', 2); }
@@ -4839,6 +4933,12 @@ function drawHallScreen() {
     line(`The cabinet meets here every few minutes. Petition it: /petition …`, 26, '#9fb0d6', 2);
   }
   S.tex.needsUpdate = true;
+}
+const hallPhotos = new Map();
+function hallPhoto(file) { // a city photo for the screen (CORS-clean, or it never loads, so the texture can't be tainted)
+  if (!file) return null; let im = hallPhotos.get(file);
+  if (!im) { im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => { hallViz.dirty = true; }; im.src = `${API_BASE}/api/city/${encodeURIComponent(file)}`; hallPhotos.set(file, im); if (hallPhotos.size > 12) hallPhotos.delete(hallPhotos.keys().next().value); }
+  return im.complete && im.naturalWidth ? im : null;
 }
 function drawHallBoard() {
   const B = hallViz.board, n = net.nation; if (!B || !n?.founded) return;
