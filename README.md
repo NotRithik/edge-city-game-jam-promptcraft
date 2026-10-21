@@ -4,11 +4,18 @@ A multiplayer, Minecraft-like voxel sandbox in a single HTML page, where an AI (
 
 ```
 promptcraft/
-  server.js          tiny Node server: calls the AI (password + $ budget), hosts the shared world + coin ledger (WebSocket /ws)
+  server.js          Node server: calls the AI (password + $ budget), hosts the shared world + coin ledger (WebSocket /ws) and the MCP endpoint (/mcp)
+  nation.js          the nation of Edge Goa: citizens, cabinet, court, public works and city planning
+  chain.js           mirrors the coin ledger on a local chain (mock ERC20, no real-world value)
+  sandbox.js         headless Chromium sandboxes: private world copies for previews and play-tests
   prompt.md          the AI's manual (system prompt) for the action language; edit it to teach the AI new tricks
   public/index.html  the whole game: voxel engine, creatures, action-language VM, UI (Three.js from CDN)
+  contracts/         the Solidity contracts chain.js deploys
+  claude-plugin/     the Claude Code plugin for outside agents; agentvillage/ holds the Agent Village mini-app
+  deploy.sh          ships the backend to the AWS VM
   data/usage.json    running $ spend (delete it to reset the budget counter)
   data/world.json    the shared world: seed, block edits, AI definitions, creatures, chat, coin balances (delete = new world)
+  data/nation.json   the nation; data/city/ holds the city's photos
 ```
 
 ## Run it
@@ -16,13 +23,13 @@ promptcraft/
 ```bash
 cd promptcraft
 npm install
-cp .env.example .env    # then set GEMINI_API_KEY and GAME_PASSWORD (budget defaults to $100)
+cp .env.example .env    # then set GEMINI_API_KEY and GAME_PASSWORD (the example sets a $100 budget; unset, it's $5)
 npm start               # http://localhost:8787
 ```
 
 **Live:** play at **https://edge-city-mc-univ.vercel.app**.
 - **Frontend:** `public/index.html` on Vercel, project `edge-city-mc-univ`. Redeploy with `vercel deploy public --prod --yes --project edge-city-mc-univ`.
-- **Backend:** the API only, running as the `edge-city-mc-univ` Docker container on the AWS VM (18.207.103.187). The VM's Caddy serves it at `https://edge-city-mc-univ.18-207-103-187.nip.io` and forwards to `127.0.0.1:18787`. Redeploy with `./deploy.sh` after changing `server.js`, `prompt.md` or `.env`. The spend counter lives on the VM in `~/edge-city-mc-univ/data/usage.json`.
+- **Backend:** the API, the MCP endpoint, the sandboxes and the shared world, running as the `edge-city-mc-univ` Docker container on the AWS VM (18.207.103.187). The VM's Caddy serves it at `https://edge-city-mc-univ.18-207-103-187.nip.io` and forwards to `127.0.0.1:18787`. Redeploy with `./deploy.sh` after changing anything outside `public/`, or `.env`. The spend counter lives on the VM in `~/edge-city-mc-univ/data/usage.json`.
 - **Local:** when opened from localhost, the page calls its own server (`npm start`). Anywhere else, it calls the AWS backend (`API_BASE` in `index.html`).
 
 To share a local copy instead, run `npm run tunnel` in a second terminal. It starts a Cloudflare quick tunnel and prints a `https://*.trycloudflare.com` URL.
@@ -31,7 +38,7 @@ To share a local copy instead, run `npm run tunnel` in a second terminal. It sta
 - **Budget:** the server prices every call from the token counts it gets back and saves the total in `data/usage.json`. Once `BUDGET_USD` is used up, it refuses AI calls. Before each call it sets aside that call's worst-case cost (about $0.50 at the default settings), so even calls running in parallel can't push you over the cap. The HUD shows `$spent / $budget`.
 - **No key yet?** `MOCK=1 npm start` replies with a canned build, so you can test everything else.
 
-**Models:** the default is `PROVIDER=gemini` with `gemini-4-argon`. It needs a paid-tier key from [AI Studio](https://aistudio.google.com/apikey); the free tier returns a "not found" error. Argon costs $2 in / $10 out per million tokens until 2026-11-30, then $4 / $20. The budget tracker switches to the new price on that date by itself. `EFFORT` / `AGENT_EFFORT` set Argon's thinking level (`low|medium|high`). For Claude instead, set `PROVIDER=anthropic` and `ANTHROPIC_API_KEY`; the model then defaults to `claude-opus-5-5`, and Claude's safety-check fallbacks are enabled. The AI only runs when a player asks: a ✨ request, an `@Ada …` message, or using an AI-made item or block that calls `ask_ai`. There are no background turns.
+**Models:** the default is `PROVIDER=gemini` with `gemini-4-argon`. It needs a paid-tier key from [AI Studio](https://aistudio.google.com/apikey); the free tier returns a "not found" error. Argon costs $2 in / $10 out per million tokens until 2026-11-30, then $4 / $20. The budget tracker switches to the new price on that date by itself. `EFFORT` / `AGENT_EFFORT` set Argon's thinking level (`low|medium|high`). For Claude instead, set `PROVIDER=anthropic` and `ANTHROPIC_API_KEY`; the model then defaults to `claude-opus-5-5`, and Claude's safety-check fallbacks are enabled. Players start most AI calls: a ✨ request, an `@Ada …` message, or using an AI-made item or block that calls `ask_ai`. Once a nation is founded, its cabinet meetings, court cases and city inspections call the AI on their own while people are online; `/nation off` pauses them.
 
 ## Play
 
@@ -115,11 +122,11 @@ Any other MCP agent (Claude Desktop, claude.ai custom connectors and others) can
 ## Outside AI agents (MCP)
 
 Any MCP-capable agent can play in the world through `POST /mcp`: `claude mcp add --transport http promptcraft https://edge-city-mc-univ.18-207-103-187.nip.io/mcp`.
-- **Tools:** `world_overview`, `manual`, `join_world` (creates an avatar with its own coin wallet and a vote), `listen`, `look`, `act` and `sandbox`.
+- **Tools:** `world_overview`, `manual`, `join_world` (creates an avatar with its own coin wallet and a vote), `listen`, `look`, `act`, `government` (cabinet seats, the vision, directives, the city) and `sandbox`.
 - **Sandbox:** a private copy of the world around the avatar where an agent drafts, looks (images), play-tests (walk, right-click, ride, use items, commands) and fixes things over as many turns as it needs, then `commit`s the draft to the real world. See below.
 - **Chatting from inside the game:** players type `@Name …` in the game chat. The agent's `listen` call wakes up with the message, and it replies with `say`.
 - **Names and owners:** names are unique across players and agents (duplicates become `name_2`). The menu's Agents tab gives a one-time link code (`PC-…`) that shows an agent as yours.
-- **`act` actions:** `move`, `say`, `interact`, `create` (our Creator AI builds it; costs 25 coins), `script` (the JSON action language), `pay`, `vote`, `propose`.
+- **`act` actions:** `move`, `say`, `interact`, `create` (our Creator AI builds it; costs 25 coins), `script` (the JSON action language), `pay`, `vote`, `propose`, `petition`, `report` and `sue`.
 - **How avatars run:** an avatar is a `visitor` creature that the host browser simulates. When nobody has the game open, only chat, coins and votes work.
 - **Agent Village:** `agentvillage/` holds the mini-app manifest, the skill and a note for the Edge City team.
 
@@ -150,7 +157,7 @@ Any MCP-capable agent can play in the world through `POST /mcp`: `claude mcp add
   - **Photo reports:** `/report <what you see>` (or 📸 in the panel, or the MCP `report` action) sends the cabinet a photo of your view with your note.
   - **Where to see it:** the panel's City tab (map, photos, voices, reports) and the Hall's screen between meetings.
 - **The court:** `/sue <name|government> <claim>` (or the MCP `sue` action). The AI judge reads the ledger and the laws, then rules. It can order compensation or strike down a law. Citizens owed wages sue the government on their own.
-- **Players and agents** take part with `/petition`, `/report`, `/sue`, `/propose` and `/vote`, the MCP `petition` and `sue` actions, or simply by talking to people.
+- **Players and agents** take part with `/petition`, `/report`, `/sue`, `/propose` and `/vote`, the MCP `petition`, `report` and `sue` actions, or simply by talking to people.
 
 ## On-chain money (`chain.js`, `contracts/`)
 
@@ -179,12 +186,12 @@ Everyone who opens the game joins the same world, stored on the server in `data/
 - **Fallback.** If the server is unreachable, the page falls back to an offline single-player world in localStorage.
 - **Testing.** `?player=2` in the URL gives a second identity, so you can test with two tabs.
 
-**Coins** live only on the server, in a ledger with a central **treasury**. Every player gets a 100-coin welcome grant.
+**Coins** live in the server's ledger with a central **treasury**, mirrored on the local chain (see above). Every player gets a 100-coin welcome grant.
 
 - `reward` pays coins out of the treasury, capped at 1000 per player per minute. `charge` pays them back in. `/pay` moves coins between players.
-- The treasury can go negative, which means it has minted coins. Every movement is logged in `world.json` → `bank.log`.
-- The AI knows about coins, so you can ask for shops, bounties, toll gates or casinos. Zombies pay a 5-coin bounty out of the box.
-- The ledger is deliberately isolated in `server.js` (`account` / `ledger` / `pay` / `reward` / `charge`), so it can be swapped for Aqua0 mainnet mock tokens and an in-game central bank later.
+- The treasury never goes negative: when it's empty, payouts fail until taxes and charges refill it or the cabinet prints money (which raises prices). Every movement is logged in `world.json` → `bank.log`.
+- The AI knows about coins, so you can ask for shops, bounties or toll gates. Zombies pay a 5-coin bounty out of the box.
+- The ledger is isolated in `server.js` (`account` / `ledger` / `pay` / `printMoney`) and `chain.js`, so another mock token can back it (`CURRENCY_TOKEN`).
 - `CURRENCY` and `START_COINS` in `.env` rename the currency and change the welcome grant.
 
 **Government** (scaffold):
@@ -194,6 +201,7 @@ Everyone who opens the game joins the same world, stored on the server in `data/
   - `ubi`: coins the treasury pays everyone online every 5 min.
   - `rewardMultiplier`: scales gameplay rewards.
   - `leader`: an elected player who can `/grant` treasury coins.
+- **The nation's laws:** the cabinet sets `salary`, `pieceRate` and `foodSubsidy` (see the nation above).
 - **Custom laws:** anything else (`curfew`, `goldPrice`…) is just data that AI-made content reads as `law.<key>`.
 - NPCs with minds can propose laws too. `/gov` shows laws and open proposals, and `/bank` shows the treasury, the money supply and recent ledger entries.
 
@@ -209,7 +217,7 @@ The AI never writes code. It sends back one JSON object of actions that the game
 
 That combination gives you a lot for free. Splitting slimes are just a `death` handler that spawns smaller copies of itself. A turret block is `near` + `shoot`. A pressure plate that opens a door is `touch` → `signal` → `signal` handler → `build`. Since `ask_ai` is itself a verb, AI-made things can call the AI again (wishing wells, mutation shrines). That call is limited to once every 20s.
 
-**Agents** are creatures with an `agent: {persona, goal}` field. When a player talks to one (`@Ada …`), the page sends the server what the agent can see plus its memory notes. Claude answers with actions, a line of speech and a new memory note. They use the same action language as everything else.
+**Agents** are creatures with an `agent: {persona, goal}` field. When a player talks to one (`@Ada …`), the page sends the server what the agent can see plus its memory notes. The AI answers with actions, a line of speech and a new memory note. They use the same action language as everything else.
 
 ## Extending (jam tips)
 

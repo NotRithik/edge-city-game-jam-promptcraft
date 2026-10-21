@@ -13,15 +13,15 @@ export const NATION_LAWS = { // law -> [min, max, default, what it means]; the c
   pieceRate: [0, 20, 2, 'xRupees the treasury pays a citizen for every block they place on a public project'],
   foodSubsidy: [0, 100, 0, '% of the food price the treasury pays for citizens'],
 };
-const BASE_FOOD = 4, TICK_MS = 60e3, HOUR_TICKS = 1; // one economy tick = one in-game "hour"
+const BASE_FOOD = 4, TICK_MS = 60e3; // one economy tick = one in-game "hour"
 const PRICE = (key) => { const k = String(key || ''); if (!k || k === 'air') return 0; if (/gold|diamond|emerald/.test(k)) return 12; if (/glass|brick|lamp|glow|quartz|iron/.test(k)) return 2; if (/stone|cobble|planks|log|wood|sand|dirt|grass|gravel|clay/.test(k)) return 1; return 2; };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const pick = (l) => l[Math.floor(Math.random() * l.length)];
 const r2 = (v) => Math.round(v * 100) / 100;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // The capital grows on a street grid around the Hall of Government (plot D4): PLOT×PLOT lots with STREET-wide streets between.
-export const CITY = { PLOT: 24, STREET: 5, MAXR: 3 };
-export const ZONES = { civic: 'public buildings: clinic, school, library, temple, fire station', market: 'shops, markets, cafés, workshops', homes: 'houses and apartments', park: 'parks, plazas, gardens, playgrounds', works: 'docks, warehouses, utilities, water tower, industry' };
+const CITY = { PLOT: 24, STREET: 5, MAXR: 3 };
+const ZONES = { civic: 'public buildings: clinic, school, library, temple, fire station', market: 'shops, markets, cafés, workshops', homes: 'houses and apartments', park: 'parks, plazas, gardens, playgrounds', works: 'docks, warehouses, utilities, water tower, industry' };
 const ZONE_WORDS = [['park', /\bpark|garden|plaza|square|playground|fountain|promenade|botanic/], ['works', /dock|port\b|harbou?r|lighthouse|warehouse|factory|mill\b|water tower|reservoir|power|depot|forge|wharf|pier|jetty|boatyard|seawall|sea wall/], ['market', /market|shop|bazaar|café|cafe|restaurant|bakery|store|stall|trade|bar\b|inn\b|hotel/], ['homes', /\bhouses?\b|\bhomes?\b|townhouse|apartment|\bflats?\b|housing|cottage|villa|dorm|hostel/], ['civic', /./]];
 const guessZone = (name, rest = '') => { // the name decides; the description only for homes, shops and works (a library "with a garden" is still civic)
   const hit = (t, skip) => ZONE_WORDS.find(([z, re]) => !skip.includes(z) && re.test(String(t).toLowerCase()))?.[0];
@@ -39,7 +39,7 @@ function propLabel(p) { // a proposal in a few words, for the chamber's screen
 }
 
 export function startNation(ctx) {
-  const { world, pay, printMoney, balOf, TREASURY, account, CURRENCY, gov, chain, nationId, ai, addChat, notice, broadcast, askHost, humansOnline, logActivity, saveWorldSoon, planBuild, photograph = null, photoB64 = () => null, notifyAgent = () => {}, log = console.log } = ctx;
+  const { world, pay, printMoney, balOf, TREASURY, account, CURRENCY, gov, chain, nationId, ai, addChat, broadcast, askHost, humansOnline, logActivity, saveWorldSoon, planBuild, photograph = null, photoB64 = () => null, notifyAgent = () => {}, log = console.log } = ctx;
   const N = (world.nation ||= { name: ctx.NATION, founded: null, capital: null, citizens: {}, ministers: [], judge: null, projects: [], cases: [], news: [], sessions: [], protest: null, autonomy: true, economy: { baseSupply: null, foodPrice: BASE_FOOD }, nextId: 1, petitions: [] });
   for (const [k, [, , d]] of Object.entries(NATION_LAWS)) if (gov.laws[k] === undefined) gov.laws[k] = d;
   N.directives ||= []; N.retired ||= [];
@@ -121,7 +121,7 @@ Reply with JSON only:
       c.needs.food = clamp(c.needs.food - 0.12, 0, 1);
       if (c.status === 'working') c.needs.rest = clamp(c.needs.rest - 0.05, 0, 1); else c.needs.rest = clamp(c.needs.rest + 0.1, 0, 1);
       // public servants are on the government payroll
-      if (PUBLIC_SERVANTS.has(c.occupation)) wage(c, law('salary') * HOUR_TICKS, 'salary', tax);
+      if (PUBLIC_SERVANTS.has(c.occupation)) wage(c, law('salary'), 'salary', tax);
       // food: bought from a farmer, fisher, cook or merchant (the treasury may subsidise it)
       if (c.needs.food < 0.6) {
         const price = Math.ceil(N.economy.foodPrice), sub = Math.floor((price * law('foodSubsidy')) / 100), seller = sellers.length ? pick(sellers.filter((s) => s !== c)) || TREASURY : TREASURY;
@@ -290,25 +290,22 @@ COURT: ${N.cases.slice(-3).map((c) => `case #${c.id} ${c.plaintiff} v ${c.defend
     push(); saveWorldSoon();
   }
   async function plan(p) {
-    busy.planning = true;
-    try {
-      // the architect (the Creator AI) designs it in a sandbox, on its levelled plot; we keep the exact block list
-      const pl = N.city?.plots[p.plot];
-      const out = await planBuild({ site: p.site, plot: pl ? { x0: pl.x0, z0: pl.z0, size: PLOT, ground: pl.ground } : null, prompt: pl ? plotBrief(p, pl) : `Design "${p.name}" for the citizens of ${N.name}: ${p.description}. It is a PUBLIC BUILDING that citizen workers will build block by block, so: use only a "build" action (no creatures, items, effects or definitions of new blocks), place it at "pos" or "look" in front of you, keep it under about 2500 blocks, make it look great and inviting with a clear entrance.` });
-      if (!out?.blocks?.length) throw new Error('the plan came back empty');
-      let blocks = out.blocks;
-      if (pl) { const f = fitToPlot(blocks, pl); blocks = f.blocks; if (f.trimmed) log(`[nation] ${p.name}: ${f.trimmed} blocks outside plot ${pl.id} left out`); }
-      p.blocks = blocks.sort((a, b) => a[1] - b[1] || a[0] - b[0] || a[2] - b[2]); // bottom up
-      p.materials = p.blocks.reduce((s, b) => s + PRICE(b[3]), 0);
-      p.estimate = p.materials + p.blocks.filter((b) => b[3] !== 'air').length * law('pieceRate');
-      p.box = out.box; p.status = 'building'; p.note = '';
-      if (p.estimate * 1.1 > p.budget && balOf(TREASURY) > p.estimate * 1.5) { news(`The plans for "${p.name}" cost more than budgeted: the budget is revised from ${p.budget} to ${Math.ceil(p.estimate * 1.1)} ${CURRENCY}s.`, '🧾'); p.budget = Math.ceil(p.estimate * 1.1); }
-      p.chainId = N.chainProjects = (N.chainProjects || 0) + 1; chain.record('approveProject', [nid, p.name, BigInt(p.budget), Math.round(p.site.x), Math.round(p.site.y), Math.round(p.site.z)]);
-      rebalanceWorkers();
-      setHolo(p);
-      news(`Plans for "${p.name}" are ready: ${p.blocks.length} blocks, about ${p.estimate} ${CURRENCY}s (materials ${p.materials} + wages).${pl ? ` Surveyors level plot ${pl.id};` : ''} ${p.workers.length} citizens head to the site.`, '🏗');
-      sendProject(p); push(); saveWorldSoon();
-    } finally { busy.planning = false; }
+    // the architect (the Creator AI) designs it in a sandbox, on its levelled plot; we keep the exact block list
+    const pl = N.city?.plots[p.plot];
+    const out = await planBuild({ site: p.site, plot: pl ? { x0: pl.x0, z0: pl.z0, size: PLOT, ground: pl.ground } : null, prompt: pl ? plotBrief(p, pl) : `Design "${p.name}" for the citizens of ${N.name}: ${p.description}. It is a PUBLIC BUILDING that citizen workers will build block by block, so: use only a "build" action (no creatures, items, effects or definitions of new blocks), place it at "pos" or "look" in front of you, keep it under about 2500 blocks, make it look great and inviting with a clear entrance.` });
+    if (!out?.blocks?.length) throw new Error('the plan came back empty');
+    let blocks = out.blocks;
+    if (pl) { const f = fitToPlot(blocks, pl); blocks = f.blocks; if (f.trimmed) log(`[nation] ${p.name}: ${f.trimmed} blocks outside plot ${pl.id} left out`); }
+    p.blocks = blocks.sort((a, b) => a[1] - b[1] || a[0] - b[0] || a[2] - b[2]); // bottom up
+    p.materials = p.blocks.reduce((s, b) => s + PRICE(b[3]), 0);
+    p.estimate = p.materials + p.blocks.filter((b) => b[3] !== 'air').length * law('pieceRate');
+    p.box = out.box; p.status = 'building'; p.note = '';
+    if (p.estimate * 1.1 > p.budget && balOf(TREASURY) > p.estimate * 1.5) { news(`The plans for "${p.name}" cost more than budgeted: the budget is revised from ${p.budget} to ${Math.ceil(p.estimate * 1.1)} ${CURRENCY}s.`, '🧾'); p.budget = Math.ceil(p.estimate * 1.1); }
+    p.chainId = N.chainProjects = (N.chainProjects || 0) + 1; chain.record('approveProject', [nid, p.name, BigInt(p.budget), Math.round(p.site.x), Math.round(p.site.y), Math.round(p.site.z)]);
+    rebalanceWorkers();
+    setHolo(p);
+    news(`Plans for "${p.name}" are ready: ${p.blocks.length} blocks, about ${p.estimate} ${CURRENCY}s (materials ${p.materials} + wages).${pl ? ` Surveyors level plot ${pl.id};` : ''} ${p.workers.length} citizens head to the site.`, '🏗');
+    sendProject(p); push(); saveWorldSoon();
   }
   function rebalanceWorkers() { // builders, carpenters, masons and engineers share out the active projects (max 6 each); strikers keep their place
     const active = N.projects.filter((p) => p.status === 'building' && p.blocks);
@@ -394,6 +391,7 @@ COURT: ${N.cases.slice(-3).map((c) => `case #${c.id} ${c.plaintiff} v ${c.defend
   // can send photo reports of their own.
   const { PLOT, STREET, MAXR } = CITY, PITCH = PLOT + STREET;
   const origin = () => N.hall || N.capital;
+  const inUse = (p) => p.status === 'built' || p.status === 'reserved';
   function plotRect(i, j) { const O = origin(), x0 = Math.floor(O.x) - 12 + i * PITCH, z0 = Math.floor(O.z) - 10 + j * PITCH; return { x0, z0, x1: x0 + PLOT - 1, z1: z0 + PLOT - 1 }; }
   const frontOf = (i, j) => (!i && !j ? 'S' : Math.abs(j) >= Math.abs(i) ? (j > 0 ? 'N' : 'S') : i > 0 ? 'W' : 'E'); // the side facing the Hall
   function defaultZone(i, j) {
@@ -492,7 +490,7 @@ ${park ? `It is a public ${/plaza|square/i.test(p.name + ' ' + p.description) ? 
   const frontKey = (p) => ({ N: `h${p.i},${p.j}`, S: `h${p.i},${p.j + 1}`, W: `v${p.i},${p.j}`, E: `v${p.i + 1},${p.j}` })[p.front];
   function unpaved() { // street sections next to used plots that are still dirt, frontages first
     const C = N.city; if (!C) return [];
-    const used = Object.values(C.plots).filter((p) => p.status === 'built' || p.status === 'reserved').sort((a, b) => a.ring - b.ring), all = used.flatMap(streetSegs), fronts = new Set(used.map(frontKey)), out = new Map();
+    const used = Object.values(C.plots).filter(inUse).sort((a, b) => a.ring - b.ring), all = used.flatMap(streetSegs), fronts = new Set(used.map(frontKey)), out = new Map();
     for (const s of [...all.filter((s) => fronts.has(s.key)), ...all]) if (!C.paved.includes(s.key) && !out.has(s.key)) out.set(s.key, s);
     return [...out.values()];
   }
@@ -524,7 +522,7 @@ ${park ? `It is a public ${/plaza|square/i.test(p.name + ' ' + p.description) ? 
     if (busy.inspect) return { ok: false, msg: 'An inspection is already under way.' };
     busy.inspect = true; C.lastInspect = Date.now(); C.lastSig = citySig(); push();
     try {
-      const O = origin(), used = Object.values(C.plots).filter((p) => p.status === 'built' || p.status === 'reserved');
+      const O = origin(), used = Object.values(C.plots).filter(inUse);
       const xs = used.flatMap((p) => [p.x0 - STREET, p.x0 + PLOT + STREET - 1]), zs = used.flatMap((p) => [p.z0 - STREET, p.z0 + PLOT + STREET - 1]);
       const box = [Math.min(...xs), O.y - 2, Math.min(...zs), Math.max(...xs), O.y + 16, Math.max(...zs)];
       const people = cits().sort((a, b) => a.mood - b.mood), walkers = [...new Set([people[Math.floor(Math.random() * Math.ceil(people.length / 2))], pick(people)])].filter(Boolean);
@@ -583,7 +581,7 @@ JSON only: {"scores":{"looks":0-10,"streets":0-10,"green":0-10,"night":0-10,"ser
   }
   function cityBrief() {
     const C = N.city; if (!C) return '';
-    const used = Object.values(C.plots).filter((p) => p.status === 'built' || p.status === 'reserved'), free = {}, R = C.reports.at(-1), fb = C.feedback.filter((f) => Date.now() - f.t < 30 * 60e3).slice(-4);
+    const used = Object.values(C.plots).filter(inUse), free = {}, R = C.reports.at(-1), fb = C.feedback.filter((f) => Date.now() - f.t < 30 * 60e3).slice(-4);
     for (const p of Object.values(C.plots)) if (p.status === 'free' && p.ring <= C.ring) free[p.zone] = (free[p.zone] || 0) + 1;
     return `\nCITY PLAN: ${C.plan || 'a street grid around the Hall'} Style: ${C.style || DEFAULT_STYLE}. Plots in use: ${used.map((p) => `${p.id} ${p.name}`).join(', ')}. Free plots: ${Object.entries(free).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'}. Street sections paved: ${C.paved.length}; still dirt next to buildings: ${unpaved().length}.`
       + (R ? `\nLAST CITY INSPECTION #${R.id} (${Math.round((Date.now() - R.t) / 60e3)} min ago): ${SCORES.map((k) => `${k} ${R.scores[k]}/10`).join(', ')}. ${R.summary} Issues: ${R.issues.join('; ') || 'none'}. Citizens said: ${R.voices.map((v) => `${v.name}: "${v.says}"`).join(' | ') || '-'}. The inspector suggests: ${R.proposals.map(propLabel).join('; ') || 'nothing'}.` : '')
@@ -600,7 +598,7 @@ JSON only: {"scores":{"looks":0-10,"streets":0-10,"green":0-10,"night":0-10,"ser
     const C = ensureCity(); if (!C) return { founded: false };
     const R = C.reports.at(-1);
     return { plan: C.plan, style: C.style, map: cityMap(), districts: C.districts, street_sections_paved: C.paved.length, street_sections_still_dirt: unpaved().length,
-      plots_in_use: Object.values(C.plots).filter((p) => p.status === 'built' || p.status === 'reserved').map((p) => `${p.id} ${p.name} (${p.zone}, ${p.status === 'built' ? 'built' : 'going up'})`),
+      plots_in_use: Object.values(C.plots).filter(inUse).map((p) => `${p.id} ${p.name} (${p.zone}, ${p.status === 'built' ? 'built' : 'going up'})`),
       last_inspection: R ? { id: R.id, when: new Date(R.t).toISOString(), trigger: R.trigger, scores: R.scores, summary: R.summary, issues: R.issues, citizens_said: R.voices, suggested: R.proposals, photos: R.photos.map((p) => p.label) } : null,
       photo_reports: C.feedback.slice(-6).map((f) => ({ id: f.id, by: f.by, text: f.text, seen: f.seen || null })), proposal_formats: CITY_PROPOSALS, photo_files: R?.photos.map((p) => p.file) || [] };
   }
@@ -740,12 +738,11 @@ JSON only: {"scores":{"looks":0-10,"streets":0-10,"green":0-10,"night":0-10,"ser
   }, 10e3).unref();
 
   return {
-    view, push, found, cabinetSession, commission, fileCase, progress, canRun, appoint, resign, setVision, directive, speak, ministerStatus, inspectCity, report, cityStatus, paveStreets,
+    view, found, cabinetSession, fileCase, progress, canRun, appoint, resign, setVision, directive, speak, ministerStatus, inspectCity, report, cityStatus,
     get state() { return N; },
     hostJoined() { if (!N.founded) return; if (!N.hall) buildHall(); if (!N.city?.planned) planCity().catch((e) => log('[nation] city plan failed: ' + e.message)); for (const p of N.projects) if (p.status === 'building' && p.blocks) sendProject(p); },
     get holo() { return N.holo || null; },
     petition(by, text) { const t = String(text || '').trim().slice(0, 200); if (!t) return { ok: false, msg: 'Usage: /petition <what you want the government to do>' }; N.petitions.push({ by, text: t, t: Date.now() }); if (N.petitions.length > 20) N.petitions.shift(); news(`${by} petitions the cabinet: "${t}"`, '✉️'); N.wantMeeting = `a petition from ${by}`; return { ok: true, msg: 'Petition delivered: the cabinet will discuss it.' }; },
     setAutonomy(on) { N.autonomy = !!on; push(); return { ok: true, msg: `The cabinet ${on ? 'governs on its own again (meets every few minutes while people are online)' : 'is paused (it only meets when called with /nation meet)'}.` }; },
-    citizenState(id) { const c = N.citizens[id]; return c && { mood: c.mood, status: c.status, grievances: c.grievances, coins: balOf(c.id), job: c.job, unpaid: c.unpaid, memory: c.memory.slice(-5) }; },
   };
 }

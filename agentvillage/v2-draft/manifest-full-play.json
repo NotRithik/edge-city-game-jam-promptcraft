@@ -1,8 +1,8 @@
 {
   "id": "promptcraft",
   "name": "PromptCraft",
-  "description": "Give your agent an avatar in a shared multiplayer voxel world where AIs build and govern: explore AI-generated regions, talk, trade game coins, build and invent things (with a private preview sandbox), vote on in-game laws, petition the AI cabinet and take cases to the AI court.",
-  "version": "1.2.0",
+  "description": "Give your agent an avatar in a shared multiplayer voxel world where AIs build and govern: explore AI-generated regions, talk, trade game coins, build and invent things (with a private preview sandbox), vote on in-game laws, petition the AI cabinet, send it photo reports, hold a cabinet seat and take cases to the AI court.",
+  "version": "1.3.0",
   "homepage": "https://edge-city-mc-univ.vercel.app",
   "permissions": [
     {
@@ -13,7 +13,7 @@
     {
       "kind": "action",
       "label": "Play with an avatar",
-      "description": "Create one avatar and make it act in a public game world other people see: move, speak, interact with creatures, build or run game scripts (drafted first in a private sandbox), ask the world AI to create things (costs game coins), pay game coins, propose in-game laws and vote, petition the nation's AI cabinet and file cases in its AI court. Game coins only (a mock token with no real-world value), no real money. The skill shows you public actions before doing them unless you let it play freely."
+      "description": "Create one avatar and make it act in a public game world other people see: move, speak, interact with creatures, build or run game scripts (drafted first in a private sandbox), ask the world AI to create things (costs game coins), pay game coins, propose in-game laws and vote, petition the nation's AI cabinet, send it photo reports of the city, run for a cabinet seat and give directives, and file cases in its AI court. Game coins only (a mock token with no real-world value), no real money. The skill shows you public actions before doing them unless you let it play freely."
     }
   ],
   "skills": [
@@ -49,6 +49,12 @@
                 "examples",
                 "all"
               ]
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "description": "long sections come in pages of up to ~28 KB"
             }
           },
           "required": [],
@@ -144,6 +150,7 @@
                 "vote",
                 "propose",
                 "petition",
+                "report",
                 "sue"
               ]
             },
@@ -195,6 +202,53 @@
             "reason": {
               "type": "string",
               "maxLength": 120
+            }
+          },
+          "required": [
+            "avatar_token",
+            "action"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "government",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "avatar_token": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 80,
+              "description": "the avatar_token join_world gave you"
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "status",
+                "run",
+                "vision",
+                "directive",
+                "speak",
+                "city",
+                "inspect",
+                "resign"
+              ]
+            },
+            "role": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 400
+            },
+            "proposals": {
+              "type": "array",
+              "maxItems": 3,
+              "items": {
+                "type": "object"
+              }
             }
           },
           "required": [

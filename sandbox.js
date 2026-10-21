@@ -1,7 +1,7 @@
 // Sandboxes: private copies of the shared world where an AI previews what it makes before it's real.
 // Each session is one headless Chrome tab running the game page with ?sandbox=1 (see section 13 of public/index.html):
 // load a snapshot of the world around a site, apply draft actions, render views, and play-test like a player.
-// Nothing in a sandbox is saved or sent to players; commit() hands the draft back for the real world.
+// Nothing in a sandbox is saved or sent to players; the server's sandbox tool commits the draft to the real world.
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 
@@ -88,7 +88,6 @@ export function makeSandboxes({ baseUrl, max = 3, idleMs = 10 * 60e3, log = cons
   }
   return {
     available: () => !!chrome,
-    count: () => sessions.size,
     open, close, get,
     apply: (s, actions, opts = {}) => run(s, async () => { const r = await call(s, (a, o) => window.sandbox.apply(a, o), actions, opts); s.draft.push(actions); return { ...r, ...take(s) }; }),
     view: (s, specs) => run(s, async () => { const out = []; for (const v of specs) out.push(await call(s, (x) => window.sandbox.view(x), v)); return out; }),

@@ -2856,7 +2856,6 @@ async function askAI(prompt, { self = null, quiet = false, agent = null, region 
   const ctx = agent ? { self: agent, pos: agent.center(), vars: {} } : region ? { self: player, pos: { ...region.center }, vars: { region: [region.rx, region.rz] }, byPlayer: true } : { ...(self ? { self, pos: posOf(self) } : useCtx()), vars: {}, byPlayer: !self };
   if (!agent && !region) ai.history.push({ prompt, message, keys: definedKeys(actions) }), ai.history.length > 8 && ai.history.shift();
   runActions(actions, ctx);
-  console.log('[ai]', agent ? agent.name : 'creator', res.j);
   saveSoon();
   return res.j;
 }
@@ -3718,11 +3717,7 @@ function becomeHost(list, fresh) {
   net.isHost = true; net.hostId = net.myId;
   for (const e of [...entities]) removeEntity(e); net.ents.clear();
   if (fresh) spawnStarters();
-  else for (const s of list || []) {
-    if (!DEFS.entity[s.type]) continue;
-    const en = new Entity(s.type, live.get(s.id) || s.pos, { vars: s.vars, hp: s.hp, name: s.name, memory: s.memory || [], own: s.own });
-    if (s.id) en.id = s.id; en.home = s.home || { ...en.pos }; if (s.team) en.team = s.team; if (s.log) en.log = s.log; restoreState(en, s); entities.push(en);
-  }
+  else for (const s of list || []) reviveEntity(s, live.get(s.id));
   nextEid = Math.max(nextEid, ...entities.map((e) => e.id + 1));
   net.entT = net.saveT = 0;
   if (net.players.size) sysMsg('🖥 Your browser is now the host: it runs the creatures for everyone (keep this tab open).');
@@ -3962,17 +3957,10 @@ function startOnline(w) {
   Object.assign(net, { online: true, myId: w.you, hostId: w.hostId, currency: w.currency || net.currency, agents: w.agents || [] });
   if (w.name) playerName = w.name; // the server de-duplicates names (name_2) so @tags stay unambiguous
   SEED = w.seed;
-  net.applying = true;
-  for (const kind of ['block', 'ability', 'structure', 'item', 'entity', 'rule', 'biome']) for (const d of Object.values(w.defs?.[kind] || {})) { try { registerDef(kind, d, true); } catch (err) { console.warn(err); } }
-  for (const [k, m] of Object.entries(w.edits || {})) editsByChunk.set(k, new Map(Object.entries(m).map(([i, key]) => [+i, key])));
-  for (const [k, r] of Object.entries(w.regions || {})) regions.set(k, r);
-  anyBiomes = [...regions.values()].some((x) => x.status === 'ready');
+  applyWorld(w);
   if (w.gov) net.gov = w.gov;
   if (w.nation) { net.nation = w.nation; if (w.nation.meeting) HALLSTATE.meeting = { trigger: w.nation.meeting.trigger, speeches: [] }; if (w.nation.courtOpen) HALLSTATE.court = { ...w.nation.courtOpen }; }
   if (w.holo) setHolo(w.holo);
-  Object.assign(globals, w.globals || {});
-  if (w.sky) applySky({ ...w.sky });
-  net.applying = false;
   let me = null; try { me = JSON.parse(localStorage.getItem(MP_KEY()) || 'null'); } catch {}
   spawnPoint = groundSpawn();
   makePlayer(me?.pos || spawnPoint); if (!me) needSettle = true;
@@ -4317,7 +4305,7 @@ function load() {
   let s = null; try { s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch {}
   if (!s) return false;
   SEED = s.seed ?? SEED;
-  for (const kind of ['block', 'ability', 'structure', 'item', 'entity', 'rule', 'biome']) for (const d of s.defs?.[kind] || []) { try { registerDef(kind, d, true); } catch (err) { console.warn(err); } }
+  for (const kind of DEF_KINDS) for (const d of s.defs?.[kind] || []) { try { registerDef(kind, d, true); } catch (err) { console.warn(err); } }
   for (const [k, list] of s.edits || []) editsByChunk.set(k, new Map(list));
   for (const [k, r] of s.regions || []) regions.set(k, r);
   anyBiomes = [...regions.values()].some((x) => x.status === 'ready');
@@ -4327,13 +4315,26 @@ function load() {
   spawnPoint = groundSpawn();
   makePlayer(s.me?.pos || s.player?.pos || spawnPoint);
   restoreMe(s.me || { ...s.player, history: s.history });
-  for (const e of s.entities || []) {
-    if (!DEFS.entity[e.type]) continue;
-    const en = new Entity(e.type, e.pos, { vars: e.vars, hp: e.hp, name: e.name, memory: e.memory || [], own: e.own });
-    en.home = e.home || en.pos; if (e.team) en.team = e.team; restoreState(en, e); entities.push(en);
-  }
+  for (const e of s.entities || []) reviveEntity(e);
+  nextEid = Math.max(nextEid, ...entities.map((e) => e.id + 1));
   for (const [h, c] of s.chat || []) chatLine(h, c, true);
   return true;
+}
+const DEF_KINDS = ['block', 'ability', 'structure', 'item', 'entity', 'rule', 'biome']; // registration order: blocks before the things that use them
+function applyWorld(w) { // the server's shared world (multiplayer and sandboxes): definitions, block edits, regions, globals, sky
+  net.applying = true;
+  for (const kind of DEF_KINDS) for (const d of Object.values(w.defs?.[kind] || {})) { try { registerDef(kind, d, true); } catch (err) { console.warn(err); } }
+  for (const [k, m] of Object.entries(w.edits || {})) editsByChunk.set(k, new Map(Object.entries(m).map(([i, key]) => [+i, key])));
+  for (const [k, r] of Object.entries(w.regions || {})) regions.set(k, r);
+  anyBiomes = [...regions.values()].some((x) => x.status === 'ready');
+  Object.assign(globals, w.globals || {}); if (w.sky) applySky({ ...w.sky });
+  net.applying = false;
+}
+function reviveEntity(s, pos = s.pos) { // a saved creature back into the world
+  if (!DEFS.entity[s.type]) return null;
+  const en = new Entity(s.type, pos, { vars: s.vars, hp: s.hp, name: s.name, memory: s.memory || [], own: s.own });
+  if (s.id) en.id = s.id; en.home = s.home || { ...en.pos }; if (s.team) en.team = s.team; if (s.log) en.log = s.log; restoreState(en, s); entities.push(en);
+  return en;
 }
 function restoreState(en, s) { if (s.state && en.def.states?.[s.state]) { en.state = s.state; en.stateT = nowS(); applyStateBrain(en); } en.ambient = !!s.ambient; }
 // ---------------------------------------------------------------- 13. sandbox (?sandbox=1)
@@ -4342,23 +4343,13 @@ function restoreState(en, s) { if (s.state && en.def.states?.[s.state]) { en.sta
 // player would: keys, clicks, riding, items, commands (sandbox.play). Nothing here is saved or sent to anyone.
 function startSandbox(w) {
   SEED = w.seed; RD = clamp(+w.rd || 6, 3, 10); applyRenderDistance();
-  net.applying = true;
-  for (const kind of ['block', 'ability', 'structure', 'item', 'entity', 'rule', 'biome']) for (const d of Object.values(w.defs?.[kind] || {})) { try { registerDef(kind, d, true); } catch (err) { console.warn(err); } }
-  for (const [k, m] of Object.entries(w.edits || {})) editsByChunk.set(k, new Map(Object.entries(m).map(([i, key]) => [+i, key])));
-  for (const [k, r] of Object.entries(w.regions || {})) regions.set(k, r);
-  anyBiomes = [...regions.values()].some((x) => x.status === 'ready');
-  Object.assign(globals, w.globals || {}); if (w.sky) applySky({ ...w.sky });
-  net.applying = false;
+  applyWorld(w);
   sbTime(w.time || 'day');
   const s = w.site || {};
   spawnPoint = s.pos ? { ...s.pos } : groundSpawn();
   makePlayer(spawnPoint); if (!s.pos) needSettle = true;
   look.yaw = +s.yaw || 0; look.pitch = +s.pitch || 0;
-  for (const e of w.entities || []) {
-    if (!DEFS.entity[e.type]) continue;
-    const en = new Entity(e.type, e.pos, { vars: e.vars, hp: e.hp, name: e.name, own: e.own });
-    if (e.id) en.id = e.id; en.home = e.home || { ...en.pos }; if (e.team) en.team = e.team; restoreState(en, e); entities.push(en);
-  }
+  for (const e of w.entities || []) reviveEntity(e);
   nextEid = Math.max(nextEid, ...entities.map((e) => e.id + 1));
   gameMode = 'creative'; playing = true; simMs = performance.now();
 }

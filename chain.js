@@ -1,5 +1,5 @@
 // The on-chain side of PromptCraft's economy (MOCK tokens, no real-world value).
-// Money is a real ERC20 (MockToken here; any ERC20 via CURRENCY_TOKEN later) held by PromptCraftVault, which keeps
+// Money is a real ERC20 (MockToken by default, or any mock ERC20 set with CURRENCY_TOKEN) held by PromptCraftVault, which keeps
 // every game account's balance (players, AI agents, citizens, the treasury). The server moves value with batched
 // operator transactions, so players need no wallet or gas. Laws, cabinet decisions, court rulings and public works
 // are recorded in PromptCraftGov.
@@ -141,7 +141,6 @@ export function startChain({ root, port, currency, log = console.log }) {
     return out;
   }
   async function stop() { try { await flush(); } catch {} if (anvil) { anvil.kill('SIGTERM'); await new Promise((r) => setTimeout(r, 800)); } }
-  api.flush = flush;
   boot().catch((e) => { st.error = e.message; log('[chain] failed to start: ' + e.message + ' (the game keeps running on the server ledger)'); });
   return api;
 }

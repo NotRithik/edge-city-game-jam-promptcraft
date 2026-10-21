@@ -263,11 +263,10 @@ function mockReply(prompt, role) {
 const failures = new Map(); // ip -> {n, t}
 // Behind Caddy / Cloudflare the socket is always 127.0.0.1, so use the proxy's forwarded client IP.
 const clientIp = (req) => req.headers['cf-connecting-ip'] || String(req.headers['x-forwarded-for'] || '').split(',').pop().trim() || req.socket.remoteAddress || '?';
-function adminOk(req) { // the activity log is for whoever runs the game: ADMIN_PASSWORD if set, otherwise the game password
-  const given = String(req.headers['x-admin-password'] || req.headers['x-game-password'] || '');
-  const h = (v) => crypto.createHash('sha256').update(v).digest();
-  return crypto.timingSafeEqual(h(given), h(process.env.ADMIN_PASSWORD || PASSWORD));
-}
+const sha = (v) => crypto.createHash('sha256').update(String(v)).digest();
+const secretOk = (given, expected) => crypto.timingSafeEqual(sha(given || ''), sha(expected));
+// the activity log is for whoever runs the game: ADMIN_PASSWORD if set, otherwise the game password
+const adminOk = (req) => secretOk(req.headers['x-admin-password'] || req.headers['x-game-password'], process.env.ADMIN_PASSWORD || PASSWORD);
 function activityReport(limit) {
   let events = [];
   try { events = fs.readFileSync(ACTIVITY_FILE, 'utf8').trim().split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}
@@ -283,12 +282,7 @@ function activityReport(limit) {
     commands: count((e) => (e.ev === 'cmd' ? e.key : null)), recent: events.slice(-limit),
   };
 }
-function passwordOk(req) {
-  const given = String(req.headers['x-game-password'] || '');
-  const a = crypto.createHash('sha256').update(given).digest();
-  const b = crypto.createHash('sha256').update(PASSWORD).digest();
-  return crypto.timingSafeEqual(a, b);
-}
+const passwordOk = (req) => secretOk(req.headers['x-game-password'], PASSWORD);
 function tooManyFailures(req) {
   const f = failures.get(clientIp(req));
   return f && f.n >= 10 && Date.now() - f.t < 10 * 60e3;
@@ -444,7 +438,7 @@ async function reviewDraft({ prompt, context, out, site, prep = [] }) {
 // ============================================================================ multiplayer + currency
 // The server keeps the shared world (seed, block edits, AI definitions, chat, saved creatures) and relays live
 // updates. One connected browser is the "host": it simulates creatures and runs the action language; others render.
-// Coins live only here (server-authoritative ledger) so they can later be swapped for on-chain tokens.
+// Coins: a server-side ledger (pay() below), mirrored to a local chain by chain.js, which is the source of truth on restart.
 const WORLD_FILE = path.join(ROOT, 'data', 'world.json');
 const CURRENCY = process.env.CURRENCY || 'xRupee'; // Edge Goa's in-game rupee
 const START_COINS = Number(process.env.START_COINS || 100);
@@ -520,7 +514,7 @@ function electHost() { // prefer a player whose tab is visible (hidden tabs stop
   broadcast({ t: 'hostid', id: clients.get(hostWs).id });
 }
 
-// --- ledger: wallets + a central "treasury" (rewards come out of it, charges go into it; it may go negative = minting)
+// --- ledger: wallets + a central "treasury" (rewards come out of it, charges go into it)
 const bank = world.bank;
 const names = () => Object.fromEntries(Object.entries(bank.accounts).map(([id, a]) => [id, a.name]));
 const balances = () => Object.fromEntries(Object.entries(bank.accounts).map(([id, a]) => [id, a.balance]));
@@ -645,15 +639,11 @@ function handleMsg(me, m, raw) {
     case 'away': me.away = !!m.v; if ((isHost && me.away) || (!isHost && !me.away && clients.get(hostWs)?.away)) electHost(); break;
     case 'edits': if (Array.isArray(m.l)) { for (const e of m.l.slice(0, 50000)) applyEdit(e); broadcast(raw, me.ws); saveWorldSoon(); } break;
     case 'def': if (KINDS.has(m.kind) && m.def && typeof m.def.key === 'string') { (world.defs[m.kind] ||= {})[m.def.key] = m.def; broadcast({ t: 'def', kind: m.kind, def: m.def, by: me.name }, me.ws); saveWorldSoon(); } break;
-    case 'chat': {
-      const line = { name: me.name, text: String(m.text || '').slice(0, 600), kind: ['chat', 'prompt', 'ai'].includes(m.kind) ? m.kind : 'chat', ts: Date.now() };
-      world.chat.push(line); if (world.chat.length > 200) world.chat.splice(0, world.chat.length - 200);
-      broadcast({ t: 'chat', ...line }, me.ws); saveWorldSoon(); deliverMentions(line); break;
-    }
+    case 'chat': addChat({ name: me.name, text: String(m.text || '').slice(0, 600), kind: ['chat', 'prompt', 'ai'].includes(m.kind) ? m.kind : 'chat' }, me.ws); break;
     case 'agentcode': { // one-time code that links an outside agent (join_world {code}) to this player
       const code = 'PC-' + crypto.randomBytes(3).toString('hex').toUpperCase();
       agentCodes.set(code, { owner: me.id, expires: Date.now() + 30 * 60e3 });
-      sendTo(me.ws, { t: 'agentcode', code, mcp: PUBLIC_MCP }); break;
+      sendTo(me.ws, { t: 'agentcode', code }); break;
     }
     case 'name': me.name = uniqueName(cleanName(m.name), me.id); account(me.id, me.name); sendTo(me.ws, { t: 'you', name: me.name }); broadcast({ t: 'name', id: me.id, name: me.name }, me.ws); pushBalances(); break;
     // host -> everyone
@@ -662,7 +652,7 @@ function handleMsg(me, m, raw) {
     case 'sky': if (isHost) { world.sky = m.sky; broadcast(raw, me.ws); saveWorldSoon(); } break;
     case 'pfx': if (isHost) for (const c of clients.values()) if (c.id === m.to) sendTo(c.ws, raw); break;
     // anyone -> host (the host runs all game logic)
-    case 'run': case 'use': case 'hit': case 'interact': case 'blockev': case 'spawn': case 'ride': case 'drop': case 'agentnote': case 'cmd':
+    case 'run': case 'hit': case 'spawn': case 'ride': case 'drop': case 'agentnote': case 'cmd':
       if (hostWs && !isHost) sendTo(hostWs, { ...m, from: me.id }); break;
     // currency
     case 'pay': { const r = transfer(me.id, m.to, m.amount, m.memo); sendTo(me.ws, { t: 'ledger', rid: m.rid, ok: r.ok, msg: r.msg }); break; }
@@ -774,9 +764,10 @@ function attachMultiplayer(server) {
 
 // ============================================================================ outside agents (MCP at POST /mcp)
 // AI agents from outside (Agent Village residents' agents, Claude, OpenClaw…) get an avatar in the shared world and
-// play through 5 tools. join_world and act CHANGE the public game world and say so; the others only read.
+// play through the MCP_TOOLS below. join_world, act, sandbox commit and government CHANGE the public world and say so.
 // An avatar is a creature simulated by the host browser like any other, with its own coin wallet (account "ag_…")
-// and a vote. Agents bring their own intelligence; only "create" spends our AI budget, and it costs game coins.
+// and a vote. Agents bring their own intelligence. What spends our AI budget is rate-limited: create and sandbox
+// generate cost game coins, and petitions, reports, lawsuits and directives wake the nation's AI.
 // Game coins only, no real money.
 world.agents ||= {};
 const PLAY_URL = process.env.PLAY_URL || 'https://edge-city-mc-univ.vercel.app';
@@ -784,7 +775,6 @@ const CREATE_COST = Number(process.env.CREATE_COST || 25);
 const tokenHash = (t) => crypto.createHash('sha256').update('pc-agent:' + t).digest('hex');
 const agentByToken = new Map(Object.entries(world.agents).map(([id, a]) => [a.tokenHash, id]));
 const agentCodes = new Map(); // "PC-XXXXXX" -> { owner, expires }
-const PUBLIC_MCP = process.env.PUBLIC_MCP || 'https://edge-city-mc-univ.18-207-103-187.nip.io/mcp';
 const agentList = () => Object.entries(world.agents).map(([id, a]) => ({ id, name: a.name, owner: a.owner || null, ownerName: a.owner ? bank.accounts[a.owner]?.name || null : null, active: Date.now() - (a.lastSeen || 0) < 120e3, listening: (agentWaiters.get(id)?.size || 0) > 0 }));
 let lastAgentsJson = '';
 function pushAgents() { const l = agentList(), j = JSON.stringify(l); if (j !== lastAgentsJson) { lastAgentsJson = j; broadcast({ t: 'agents', list: l }); } }
@@ -800,7 +790,7 @@ function askHost(op, data, timeout = 8000) { // ask the host browser (which simu
     setTimeout(() => { if (hostWaits.delete(rid)) resolve({ ok: false, msg: 'The world did not answer in time (the host tab may be in the background); try again.' }); }, timeout);
   });
 }
-function addChat(line) { const l = { ...line, ts: Date.now() }; /* "ts", not "t": t is the message type */ world.chat.push(l); if (world.chat.length > 200) world.chat.splice(0, world.chat.length - 200); broadcast({ t: 'chat', ...l }); saveWorldSoon(); deliverMentions(l); }
+function addChat(line, except = null) { const l = { ...line, ts: Date.now() }; /* "ts", not "t": t is the message type */ world.chat.push(l); if (world.chat.length > 200) world.chat.splice(0, world.chat.length - 200); broadcast({ t: 'chat', ...l }, except); saveWorldSoon(); deliverMentions(l); }
 // Messages addressed to an agent ("@Pixel hi", or its name in chat, or a payment) wait in its inbox until it calls
 // listen (which long-polls, so agents can chat live) or look.
 const agentInbox = new Map(), agentWaiters = new Map(); // agentId -> [{from, text, t}] / Set(wake)
@@ -903,6 +893,7 @@ async function callTool(name, args) {
   }
   throw new Error(`Unknown tool "${name}".`);
 }
+const cityPhotos = (insp, files = []) => files.map((f, i) => ({ label: insp?.photos[i] || 'city photo', image: photoB64(f) })).filter((p) => p.image);
 async function governmentTool(a, x) { // agents in the nation's cabinet: run for a seat, set the vision, give directives, speak in meetings
   const ag = world.agents[a.id], now = Date.now(), must = (r) => { if (!r.ok) throw new Error(r.msg); return r; };
   switch (x.action) {
@@ -923,15 +914,12 @@ async function governmentTool(a, x) { // agents in the nation's cabinet: run for
     case 'directive': { const r = must(nation.directive(a.id, x.text)); logActivity(a.name, 'agent_directive', { text: String(x.text || '').slice(0, 300) }); return r; }
     case 'speak': return must(nation.speak(a.id, x.text, x.proposals));
     case 'resign': return must(nation.resign(a.id));
-    case 'city': { // the city plan, the last inspection and its photos
-      const st = nation.cityStatus(), { photo_files: files = [], ...rest } = st;
-      return { ...rest, __images: files.map((f, i) => ({ label: st.last_inspection?.photos[i] || 'city photo', image: photoB64(f) })).filter((p) => p.image) };
-    }
+    case 'city': { const { photo_files, ...st } = nation.cityStatus(); return { ...st, __images: cityPhotos(st.last_inspection, photo_files) }; } // the plan, the last inspection and its photos
     case 'inspect': {
       if (!nation.state.ministers.some((m) => m.agentId === a.id)) throw new Error('Only cabinet ministers order inspections. Anyone can send a photo report with act report.');
       if (now - (nation.state.city?.lastInspect || 0) < 3 * 60e3) throw new Error('The city was inspected in the last few minutes: read it with government city.');
       const r = await nation.inspectCity(`an order from ${a.name}`); if (!r.ok) throw new Error(r.msg);
-      const st = nation.cityStatus(); return { ok: true, msg: r.msg, last_inspection: st.last_inspection, __images: (st.photo_files || []).map((f, i) => ({ label: st.last_inspection?.photos[i] || 'city photo', image: photoB64(f) })).filter((p) => p.image) };
+      const st = nation.cityStatus(); return { ok: true, msg: r.msg, last_inspection: st.last_inspection, __images: cityPhotos(st.last_inspection, st.photo_files) };
     }
   }
   throw new Error(`Unknown government action "${x.action}".`);
@@ -1122,8 +1110,7 @@ const server = http.createServer(async (req, res) => {
     cors(req, res);
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-      // Local dev serves the game too; the deployed backend has no public/ folder and is API-only.
-      if (!fs.existsSync(INDEX_FILE)) { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('PromptCraft backend is running.\n'); }
+      // the game page (players use Vercel's copy in production; sandboxes load this one)
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       return fs.createReadStream(INDEX_FILE).pipe(res);
     }

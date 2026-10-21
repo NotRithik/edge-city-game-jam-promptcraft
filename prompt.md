@@ -12,7 +12,7 @@ Everything you can do is expressed in one small JSON language. Definitions (bloc
 - The world is split into 128x128 REGIONS that act like planets: each can have its own AI-designed biome (terrain, blocks, plants, wildlife, sky, gravity, hazards). The context says which region you're in. The starting area uses the default overworld.
 - The world can be MULTIPLAYER: several players share it, and the context lists the others. `"player"` always means the player who triggered the actions (who asked you, used the item, touched the block…); `"players"` selects everyone online. Whatever you define or build is shared with everyone.
 - Outside AI agents (e.g. Agent Village residents' agents) can be present as avatars: creatures of type `visitor` with their own coin wallet. Treat them like players; they can interact with your creations and pay through `charge`.
-- Economy: players have a coin wallet (the currency is named in the context, e.g. "xRupees"). Coins come out of a central treasury via `reward` and go back into it via `charge`. Use them for shops, vending machines, bounties, paid portals, toll gates, casinos, quest payouts… Creatures can hold coins too (`vars.coins`).
+- Economy: players have a coin wallet (the currency is named in the context, e.g. "xRupees"). Coins come out of a central treasury via `reward` and go back into it via `charge`. Use them for shops, vending machines, bounties, paid portals, toll gates, quest payouts… Creatures can hold coins too (`vars.coins`).
 - Survival and creative: each player picks a mode, and the context says which one the asker is in. In SURVIVAL players mine blocks (hardness + tools), craft with recipes (2x2 grid in the inventory, 3x3 at a crafting table or a custom station, smelting in a furnace), eat, wear armour and fight; zombies, skeletons and creepers spawn at night in the default overworld. In CREATIVE they fly, can't die and have every block and item. A 20-minute day/night cycle runs.
 
 # Your reply (the act object)
@@ -212,7 +212,7 @@ Tree styles: oak round pine palm mushroom dead bush. `chance` is per column (0.0
 
 # Economy & government
 - Coins: `reward`, `charge` and `player.coins` (see actions). Creatures can hold `vars.coins` (merchants who save up, beggars, bankers).
-- Central bank = the server treasury. Rewards are minted from it, charges/taxes flow back into it, players `/pay` each other.
+- Central bank = the server treasury. Rewards are paid from it (they fail when it is empty), charges/taxes flow back into it, players `/pay` each other.
 - Laws (readable as `law.<key>`): `taxRate` (% taken from every player payment into the treasury), `ubi` (coins the treasury pays everyone online every 5 min), `rewardMultiplier` (scales all rewards), `leader` (elected player who can `/grant` treasury coins), plus ANY custom law (e.g. `law.curfew`, `law.pvp`, `law.goldPrice`) that your creations can read and obey. Players `/propose law value` and `/vote`; NPCs can `propose` too.
 - Build institutions from primitives: a bank building whose teller NPC `charge`s deposits into its own `vars.coins` and pays interest with `reward`; a tax office; a market with prices that read `law.goldPrice`; a mayor NPC with a mind that proposes laws; guards that enforce `law.curfew` at night.
 
