@@ -72,7 +72,7 @@ export function startNation(ctx) {
   for (const [k, [, , d]] of Object.entries(NATION_LAWS)) if (gov.laws[k] === undefined) gov.laws[k] = d;
   // v1 worlds had AI ministers, a judge and a cabinet; v2 is governed by residents. Keep only elected agents.
   N.ministers = (N.ministers || []).filter((m) => m.agentId); delete N.judge; delete N.retired; delete N.directives; delete N.courtOpen; delete N.meeting;
-  N.issues ||= []; N.proposals ||= []; N.trips ||= []; N.behaviors ||= {}; N.standing ||= {}; N.delegates ||= {}; N.nextIssue ||= 1; N.nextProposal ||= 1; N.petitions ||= []; N.resets ||= {};
+  N.issues ||= []; N.proposals ||= []; N.trips ||= []; N.behaviors ||= {}; N.standing ||= {}; N.delegates ||= {}; N.nextIssue ||= 1; N.nextProposal ||= 1; N.petitions ||= []; N.resets ||= {}; N.failedFixes ||= {};
   for (const c of Object.values(N.citizens)) { c.feel ||= 0; c.trips ||= []; c.incomeAvg ||= 0; c.memory ||= []; c.grievances ||= []; }
   const nid = nationId(N.name);
   const busy = { founding: false, inspect: false, audit: false };
@@ -279,7 +279,7 @@ export function startNation(ctx) {
       }
       if (tr.night && tr.len > 15 && tr.dark > tr.len / 2 && fresh(dk, tr)) {
         const x = add(`dark:${tr.where}`, { kind: 'dark', where: { x: tr.to.x, z: tr.to.z }, metrics: { darkShare: 0 }, fix: { type: 'lamps', from: tr.from, to: tr.to }, trip: tr });
-        x.people.add(c.id); x.metrics.darkShare = Math.max(x.metrics.darkShare, r2(tr.dark / Math.max(1, tr.len))); if (x.quotes.length < 2) x.quotes.push(voice(c, QUOTES.dark(c, tr)));
+        x.people.add(c.id); x.metrics.darkShare = Math.max(x.metrics.darkShare, r2(Math.min(1, tr.dark / Math.max(1, tr.len)))); if (x.quotes.length < 2) x.quotes.push(voice(c, QUOTES.dark(c, tr)));
         x.title = `The way to ${tr.where} is dark at night (${Math.round(x.metrics.darkShare * 100)}% unlit)`; x.severity = 20 + 9 * x.people.size;
       }
       if (tr.danger && tr.night && fresh(gk, tr)) {
@@ -302,10 +302,10 @@ export function startNation(ctx) {
     }
     // the economy
     const k = kpi(), cs = cits();
-    if (N.economy.foodPrice > BASE_FOOD * 1.5 || (k.mealHours && k.mealHours > 1.2)) {
+    if (N.economy.foodPrice > BASE_FOOD * 1.5 || (k.mealHours && k.mealHours > 1.5 && now - N.founded > 15 * 60e3)) {
       const x = add('price:food', { kind: 'price', where: centre(), metrics: { foodPrice: k.foodPrice, base: BASE_FOOD, mealHours: k.mealHours }, fix: { type: 'law', law: 'foodSubsidy', value: clamp(law('foodSubsidy') + 25, 0, 80) } });
       for (const c of cs.filter((y) => y.grievances.some((g) => /price|hungry/.test(g)))) { x.people.add(c.id); if (x.quotes.length < 2) x.quotes.push(voice(c, QUOTES.price(c))); }
-      x.title = `Food costs ${Math.ceil(k.foodPrice)} (normal: ${BASE_FOOD})${k.mealHours ? `: ${k.mealHours} hours of pay for one meal` : ''}`; x.severity = 30 + Math.min(50, 10 * (k.foodPrice / BASE_FOOD - 1)) + 2 * x.people.size;
+      x.title = N.economy.foodPrice > BASE_FOOD * 1.5 ? `Food costs ${Math.ceil(k.foodPrice)} (normal: ${BASE_FOOD})${k.mealHours ? `: ${k.mealHours} hours of pay for one meal` : ''}` : `A meal costs ${k.mealHours} hours of a typical citizen's pay`; x.severity = 30 + Math.min(50, 10 * (k.foodPrice / BASE_FOOD - 1)) + 2 * x.people.size;
     }
     const hungry = cs.filter((c) => c.needs.food < 0.3);
     if (hungry.length >= 2) {
@@ -600,13 +600,14 @@ export function startNation(ctx) {
     for (const p of N.proposals.filter((x) => x.status === 'executing' && !N.projects.some((q) => q.proposal === x.id && !['done', 'cancelled'].includes(q.status)))) { p.status = 'done'; p.finished = now; }
     for (const p of N.proposals.filter((x) => x.status === 'done' && !x.checked)) { // from now on the linked problems are measured afresh
       p.checked = true;
-      for (const is of N.issues.filter((i) => i.proposals.includes(p.id) && i.status !== 'resolved' && /^(route|dark|danger):/.test(i.key))) { N.resets[is.key] = p.finished || now; is.checkFrom = p.finished || now; is.status = 'checking'; }
+      for (const is of N.issues.filter((i) => i.proposals.includes(p.id) && i.status !== 'resolved' && /^(route|dark|danger):/.test(i.key))) { N.resets[is.key] = p.finished || now; is.checkFrom = p.finished || now; is.sevAtFix = is.severity; is.status = 'checking'; }
     }
     for (const p of N.proposals.filter((x) => x.status === 'done' && !x.outcome && x.issue)) {
       const is = N.issues.find((i) => i.id === p.issue); if (!is) { p.outcome = { worked: null, text: 'the issue is gone from the records' }; continue; }
-      if (is.status === 'resolved') { p.outcome = { worked: true, text: `issue #${is.id} resolved ${Math.round((is.resolved.t - p.finished) / 60e3)} min after it was carried out` }; scoreMinister(p, true); chain.record('decide', [nid, 'verified', `#${p.id} worked: ${p.outcome.text}`]); news(`📏 Proposal #${p.id} worked: ${p.outcome.text}.`, '📏'); }
+      if (is.status === 'resolved') { const mins = Math.round((is.resolved.t - p.finished) / 60e3); p.outcome = { worked: true, text: `issue #${is.id} resolved ${mins > 0 ? `${mins} min after it was carried out` : 'as it was carried out'}` }; scoreMinister(p, true); chain.record('decide', [nid, 'verified', `#${p.id} worked: ${p.outcome.text}`]); news(`📏 Proposal #${p.id} worked: ${p.outcome.text}.`, '📏'); }
       else if (is.checkFrom && !is.badAfterFix) { if (now - p.finished > 60 * 60e3) p.outcome = { worked: null, text: `no citizen has walked it since (issue #${is.id} still waiting for fresh evidence)` }; }
-      else if (is.badAfterFix || now - p.finished > 12 * 60e3) { p.outcome = { worked: false, text: `issue #${is.id} is still open (severity ${is.peak} → ${is.severity})` }; scoreMinister(p, false); is.needsHuman = `proposal #${p.id} was carried out but did not fix it`; is.fixFailed = true; is.status = 'open'; delete is.checkFrom; is.badAfterFix = null; news(`📏 Proposal #${p.id} did not fix issue #${is.id} yet. Back to the drawing board.`, '📏'); tellAgents(`⚠️ Proposal #${p.id} (${p.title}) did not fix issue #${is.id}: ${is.title}. NEEDS A HUMAN: ask your human what to try next.`, p, true); }
+      else if ((is.badAfterFix || now - p.finished > 12 * 60e3) && is.sevAtFix && is.severity <= 0.6 * is.sevAtFix) { p.outcome = { worked: 'partly', text: `issue #${is.id} is smaller (severity ${is.sevAtFix} → ${is.severity}) but not gone` }; scoreMinister(p, true); is.status = 'open'; delete is.checkFrom; is.badAfterFix = null; news(`📏 Proposal #${p.id} helped: ${p.outcome.text}.`, '📏'); }
+      else if (is.badAfterFix || now - p.finished > 12 * 60e3) { p.outcome = { worked: false, text: `issue #${is.id} is still open (severity ${is.sevAtFix || is.peak} → ${is.severity})` }; N.failedFixes[is.key] = (N.failedFixes[is.key] || 0) + 1; scoreMinister(p, false); is.needsHuman = `proposal #${p.id} was carried out but did not fix it`; is.fixFailed = true; is.status = 'open'; delete is.checkFrom; is.badAfterFix = null; news(`📏 Proposal #${p.id} did not fix issue #${is.id} yet. Back to the drawing board.`, '📏'); tellAgents(`⚠️ Proposal #${p.id} (${p.title}) did not fix issue #${is.id}: ${is.title}. NEEDS A HUMAN: ask your human what to try next.`, p, true); }
     }
     for (const p of N.proposals.filter((x) => x.status === 'done' && !x.outcome && !x.issue && now - x.finished > 60e3)) p.outcome = { worked: null, text: 'carried out (it was not tied to an issue, so there was nothing to measure)' };
   }
@@ -615,7 +616,7 @@ export function startNation(ctx) {
   function civilService() {
     if (!N.autonomy) return;
     const open = N.proposals.filter((p) => p.status === 'voting' && p.byKind === 'civil').length; if (open >= 2) return;
-    const is = N.issues.filter((i) => i.status === 'open' && i.fix && !i.fixFailed && i.severity >= 35 && !i.proposals.some((id) => ['voting', 'passed', 'executing'].includes(N.proposals.find((p) => p.id === id)?.status)) && Date.now() - (i.civilT || 0) > 15 * 60e3).sort((a, b) => b.severity - a.severity)[0];
+    const is = N.issues.filter((i) => i.status === 'open' && i.fix && !i.fixFailed && (N.failedFixes[i.key] || 0) < 2 && i.severity >= 35 && !i.proposals.some((id) => ['voting', 'passed', 'executing'].includes(N.proposals.find((p) => p.id === id)?.status)) && Date.now() - (i.civilT || 0) > 15 * 60e3).sort((a, b) => b.severity - a.severity)[0];
     if (!is) return;
     is.civilT = Date.now();
     propose({ by: 'the civil service', byKind: 'civil', title: `${remedyText(is.fix)} (issue #${is.id})`, actions: [is.fix], issue: is.id, why: `Issue #${is.id}: ${is.title}` }).then((r) => { if (!r.ok && !r.dup) { is.civilNote = r.msg; log(`[nation] civil service could not propose for #${is.id}: ${r.msg}`); } });
@@ -836,8 +837,8 @@ export function startNation(ctx) {
     return { ok: true, msg: `paving ${segs.length} street sections` };
   }
   function places() { // where citizens go: the street in front of each plot in use, by zone
-    const C = N.city; if (!C) return { hall: N.hall ? { x: N.hall.x, z: N.hall.z + 12 } : null };
-    const out = { hall: N.hall ? { x: N.hall.x, z: N.hall.z + 12 } : null, market: [], park: [], civic: [], works: [], homes: [] };
+    const hall = N.hall ? { x: N.hall.x, z: N.hall.z + 10 } : null, C = N.city; if (!C) return { hall }; // just outside the door, on the Hall's levelled plaza
+    const out = { hall, market: [], park: [], civic: [], works: [], homes: [] };
     for (const p of Object.values(C.plots)) if (inUse(p) && p.id !== 'D4' && out[p.zone]) out[p.zone].push({ ...streetPoint(p), plot: p.id, name: p.name, kind: kindOf(p.name, p.zone), built: p.status === 'built' });
     return out;
   }
