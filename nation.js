@@ -288,10 +288,10 @@ export function startNation(ctx) {
         x.title = `Monsters on the way to ${tr.where} at night`; x.severity = 30 + 10 * x.people.size;
       }
       for (const pid of tr.eyesores || []) {
-        const p = N.projects.find((y) => y.id === pid); if (!p || !['stalled', 'building', 'cancelled'].includes(p.status) || now - (p.lastWork || p.t) < 6 * 60e3) continue;
+        const p = N.projects.find((y) => y.id === pid); if (!p || !['stalled', 'building', 'cancelled'].includes(p.status) || (N.awake || 0) - (p.lastWorkA ?? p.awakeAt ?? 0) < 6 * 60e3) continue;
         const x = add(`eyesore:${pid}`, { kind: 'eyesore', where: { x: p.site.x, z: p.site.z, plot: p.plot }, metrics: { done: p.done, total: p.blocks?.length || 0 }, fix: p.status === 'cancelled' ? { type: 'demolish', project: pid } : { type: 'finish', project: pid } });
         x.people.add(c.id); if (x.quotes.length < 2) x.quotes.push(voice(c, QUOTES.eyesore(c, p)));
-        x.title = `The half-built ${p.name} is an eyesore (${p.done}/${p.blocks?.length || 0} blocks, ${p.status})`; x.severity = 20 + Math.min(30, (now - (p.lastWork || p.t)) / 60e3) + 5 * x.people.size;
+        x.title = `The half-built ${p.name} is an eyesore (${p.done}/${p.blocks?.length || 0} blocks, ${p.status})`; x.severity = 20 + Math.min(30, ((N.awake || 0) - (p.lastWorkA ?? p.awakeAt ?? 0)) / 60e3) + 5 * x.people.size;
       }
     }
     // projects that stopped
@@ -646,7 +646,7 @@ export function startNation(ctx) {
 
   // ---------------------------------------------------------------- public works: drawn from the catalogue, built by citizens
   function addProject(o) {
-    const p = { id: N.nextId++, t: Date.now(), spent: 0, done: 0, workers: [], status: 'building', note: '', ...o };
+    const p = { id: N.nextId++, t: Date.now(), awakeAt: N.awake || 0, spent: 0, done: 0, workers: [], status: 'building', note: '', ...o };
     p.materials = p.blocks.reduce((s, b) => s + PRICE(b[3]), 0); p.estimate = p.materials + p.blocks.filter((b) => b[3] !== 'air').length * law('pieceRate'); p.budget ||= Math.ceil(p.estimate * 1.15);
     N.projects.push(p); if (N.projects.length > 60) N.projects.splice(0, N.projects.length - 60);
     p.chainId = N.chainProjects = (N.chainProjects || 0) + 1; chain.record('approveProject', [nid, p.name, BigInt(p.budget), Math.round(p.site.x), Math.round(p.site.y || 0), Math.round(p.site.z)]);
@@ -696,7 +696,7 @@ export function startNation(ctx) {
         if (mat) pay(TREASURY, sellers.length ? pick(sellers).id : TREASURY, mat, `materials: ${p.name}`);
         if (c) wage(c, w, `building ${p.name}`); p.spent += mat + w; p.done++; placed++;
       }
-      if (c && placed) { c.needs.rest = clamp(c.needs.rest - 0.002 * placed, 0, 1); p.lastWork = Date.now(); }
+      if (c && placed) { c.needs.rest = clamp(c.needs.rest - 0.002 * placed, 0, 1); p.lastWork = Date.now(); p.lastWorkA = N.awake || 0; }
     }
     if (p.done >= p.blocks.length) finish(p);
     else if (Date.now() - (p.lastPush || 0) > 5000) { p.lastPush = Date.now(); push(); }
@@ -848,7 +848,7 @@ export function startNation(ctx) {
   function cityScores() {
     const C = N.city, used = Object.values(C.plots).filter(inUse), segs = used.flatMap(streetSegs), keys = new Set(segs.map((s) => s.key)), paved = [...keys].filter((k) => C.paved.includes(k)).length;
     const recent = N.trips.filter((t) => Date.now() - t.t < 40 * 60e3), night = recent.filter((t) => t.night && t.len > 10), winding = recent.filter((t) => t.straight > 8 && (t.len / t.straight > 1.7 || t.swim > 2 || t.stuck));
-    const eyes = N.projects.filter((p) => ['stalled'].includes(p.status) || (p.status === 'building' && Date.now() - (p.lastWork || p.t) > 6 * 60e3)).length;
+    const eyes = N.projects.filter((p) => ['stalled'].includes(p.status) || (p.status === 'building' && (N.awake || 0) - (p.lastWorkA ?? p.awakeAt ?? 0) > 6 * 60e3)).length;
     const have = (k) => used.some((p) => kindOf(p.name, p.zone) === k);
     return {
       streets: clamp(Math.round(10 * (keys.size ? paved / keys.size : 0) - (recent.length ? (10 * winding.length) / recent.length / 2 : 0)), 0, 10),
@@ -1018,6 +1018,7 @@ export function startNation(ctx) {
   setInterval(() => { try { economyTick(); resumeStalled(); rebalanceWorkers(); } catch (e) { log('[nation] tick failed: ' + e.message); } }, TICK_MS).unref();
   setInterval(payUbiToCitizens, 5 * 60e3).unref();
   setInterval(() => {
+    if (humansOnline()) N.awake = (N.awake || 0) + 10e3; // time the world was being played, for judging idle building sites
     for (const p of N.proposals.filter((x) => x.status === 'voting' && Date.now() > x.closes)) closeVote(p);
     const C = N.city, every = Number(process.env.CITY_INSPECT_MIN || 15) * 60e3;
     if (C && N.hall && !busy.inspect && humansOnline() && Date.now() > (C.lastInspect ? C.lastInspect + every : N.founded + 4 * 60e3) && (citySig() !== C.lastSig || Date.now() - C.lastInspect > 3 * every)) inspectCity().catch((e) => log('[nation] audit failed: ' + e.message));
