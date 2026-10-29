@@ -431,6 +431,7 @@ const DEFAULT_LAWS = { taxRate: 0, ubi: 0, rewardMultiplier: 1 };
 let world = { seed: Math.floor(Math.random() * 1e6), fresh: true, edits: {}, defs: {}, regions: {}, globals: {}, sky: null, chat: [], entities: [], bank: { accounts: {}, treasury: 0, log: [] }, gov: { laws: { ...DEFAULT_LAWS }, leader: null, proposals: [], nextId: 1 } };
 try { world = { ...world, ...JSON.parse(fs.readFileSync(WORLD_FILE, 'utf8')) }; } catch {}
 world.regions ||= {}; world.gov ||= { laws: { ...DEFAULT_LAWS }, leader: null, proposals: [], nextId: 1 };
+world.agents ||= {}; world.entities = (world.entities || []).filter((e) => !e.vars?._agent || world.agents[e.vars._agent]); // an avatar whose agent was removed goes with it
 let worldDirty = true;
 const saveWorldSoon = () => { worldDirty = true; };
 setInterval(() => {
@@ -1176,7 +1177,7 @@ const server = http.createServer(async (req, res) => {
       const nm = String(url.searchParams.get('name') || '').toLowerCase(), id = Object.keys(world.agents).find((k) => world.agents[k].name.toLowerCase() === nm);
       if (!id) return send(res, 404, { error: 'no such agent' });
       for (const [h, v] of agentByToken) if (v === id) agentByToken.delete(h);
-      delete world.agents[id]; agentInbox.delete(id); saveWorldSoon(); pushAgents();
+      delete world.agents[id]; agentInbox.delete(id); world.entities = (world.entities || []).filter((e) => e.vars?._agent !== id); saveWorldSoon(); pushAgents();
       if (hostWs) sendTo(hostWs, { t: 'agentgone', id });
       return send(res, 200, { ok: true, removed: nm });
     }
