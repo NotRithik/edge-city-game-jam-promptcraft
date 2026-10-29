@@ -10,7 +10,7 @@ ENV CHROME_PATH=/usr/bin/chromium
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
-COPY server.js sandbox.js chain.js nation.js chain-artifacts.json prompt.md ./
+COPY server.js sandbox.js chain.js nation.js buildings.js telegram.js chain-artifacts.json prompt.md ./
 # the game page itself: sandboxes load it from this server
 COPY public/index.html ./public/index.html
 RUN mkdir -p data && chown node:node data
