@@ -5,7 +5,10 @@ A multiplayer, Minecraft-like voxel sandbox in a single HTML page, where an AI (
 ```
 promptcraft/
   server.js          Node server: calls the AI (password + $ budget), hosts the shared world + coin ledger (WebSocket /ws) and the MCP endpoint (/mcp)
-  nation.js          the nation of Edge Goa: citizens, cabinet, court, public works and city planning
+  nation.js          the nation of Edge Goa: citizens and their days, issues, proposals graded A-F, public works, the city plan
+  buildings.js       public buildings drawn in code (houses, market, clinic, school, park, dock...)
+  telegram.js        optional Telegram alerts with A-F grading buttons
+  docs/governance.md how the nation is governed, and why
   chain.js           mirrors the coin ledger on a local chain (mock ERC20, no real-world value)
   sandbox.js         headless Chromium sandboxes: private world copies for previews and play-tests
   prompt.md          the AI's manual (system prompt) for the action language; edit it to teach the AI new tricks
@@ -38,7 +41,7 @@ To share a local copy instead, run `npm run tunnel` in a second terminal. It sta
 - **Budget:** the server prices every call from the token counts it gets back and saves the total in `data/usage.json`. Once `BUDGET_USD` is used up, it refuses AI calls. Before each call it sets aside that call's worst-case cost (about $0.50 at the default settings), so even calls running in parallel can't push you over the cap. The HUD shows `$spent / $budget`.
 - **No key yet?** `MOCK=1 npm start` replies with a canned build, so you can test everything else.
 
-**Models:** the default is `PROVIDER=gemini` with `gemini-4-argon`. It needs a paid-tier key from [AI Studio](https://aistudio.google.com/apikey); the free tier returns a "not found" error. Argon costs $2 in / $10 out per million tokens until 2026-11-30, then $4 / $20. The budget tracker switches to the new price on that date by itself. `EFFORT` / `AGENT_EFFORT` set Argon's thinking level (`low|medium|high`). For Claude instead, set `PROVIDER=anthropic` and `ANTHROPIC_API_KEY`; the model then defaults to `claude-opus-5-5`, and Claude's safety-check fallbacks are enabled. Players start most AI calls: a ✨ request, an `@Ada …` message, or using an AI-made item or block that calls `ask_ai`. Once a nation is founded, its cabinet meetings, court cases and city inspections call the AI on their own while people are online; `/nation off` pauses them.
+**Models:** the default is `PROVIDER=gemini` with `gemini-4-argon`. It needs a paid-tier key from [AI Studio](https://aistudio.google.com/apikey); the free tier returns a "not found" error. Argon costs $2 in / $10 out per million tokens until 2026-11-30, then $4 / $20. The budget tracker switches to the new price on that date by itself. `EFFORT` / `AGENT_EFFORT` set Argon's thinking level (`low|medium|high`). For Claude instead, set `PROVIDER=anthropic` and `ANTHROPIC_API_KEY`; the model then defaults to `claude-opus-5-5`, and Claude's safety-check fallbacks are enabled. Players start most AI calls: a ✨ request, an `@Ada …` message, or using an AI-made item or block that calls `ask_ai`. The nation runs without any AI: its citizens, issues, votes and buildings are all rules and code.
 
 ## Play
 
@@ -122,7 +125,7 @@ Any other MCP agent (Claude Desktop, claude.ai custom connectors and others) can
 ## Outside AI agents (MCP)
 
 Any MCP-capable agent can play in the world through `POST /mcp`: `claude mcp add --transport http promptcraft https://edge-city-mc-univ.18-207-103-187.nip.io/mcp`.
-- **Tools:** `world_overview`, `manual`, `join_world` (creates an avatar with its own coin wallet and a vote), `listen`, `look`, `act`, `government` (cabinet seats, the vision, directives, the city) and `sandbox`.
+- **Tools:** `world_overview`, `library`, `manual`, `join_world` (creates an avatar with its own coin wallet and a vote), `listen`, `look`, `act`, `government` (issues, proposals, A–F grades, standing instructions, portfolio seats, the city) and `sandbox`.
 - **Sandbox:** a private copy of the world around the avatar where an agent drafts, looks (images), play-tests (walk, right-click, ride, use items, commands) and fixes things over as many turns as it needs, then `commit`s the draft to the real world. See below.
 - **Chatting from inside the game:** players type `@Name …` in the game chat. The agent's `listen` call wakes up with the message, and it replies with `say`.
 - **Names and owners:** names are unique across players and agents (duplicates become `name_2`). The menu's Agents tab gives a one-time link code (`PC-…`) that shows an agent as yours.
@@ -139,25 +142,36 @@ Any MCP-capable agent can play in the world through `POST /mcp`: `claude mcp add
 
 ## The nation of Edge Goa (`nation.js`)
 
+A city that notices what goes wrong in its people's lives and lets its residents fix it. There is no AI government: players and their AI agents govern by grading proposals A–F. The design, the research behind it and what we learned from v1 are in [docs/governance.md](docs/governance.md).
+
 `/nation found`, or the 🏛 panel (J), founds a nation around a capital near the spawn.
-- **Citizens:** the AI writes each one once, with a personality, backstory, wants, politics and temper. After that they run on a cheap simulation that costs no AI.
-  - **Each simulated hour:** citizens eat (buying food from farmers, fishers, cooks and merchants), earn (public servants get a salary; builders are paid per block they place), pay tax, and decide how they feel about the government.
-  - **When it goes badly:** they strike, then march on the town hall and protest. Their slogans are AI-written.
-  - **Talking:** players can talk to any of them with `@Name`.
-- **The cabinet:** four AI ministers (President, Finance, Public Works, Welfare) meet every few minutes while people are online, or right away after a petition or a protest.
-  - **How a meeting runs:** each minister reads a briefing (treasury, prices, moods, grievances, projects, petitions), speaks and proposes. The President decides.
-  - **What they can do:** set laws (`taxRate`, `ubi`, `salary`, `pieceRate`, `foodSubsidy`), print money (prices rise), pay bonuses, commission public works, and answer protests.
-  - **Pausing:** `/nation off` pauses them; `/nation meet` calls a meeting.
-- **Public works:** the architect (the Creator AI) designs the building in a sandbox at its site, so the exact block list is known. Citizens suited to the job walk there and place it block by block. The treasury pays for materials and wages per block. If the money runs out, work stops, wages go unpaid, and people get angry.
-- **City planning:** the capital is laid out as a grid of 24×24 plots around the Hall, with 5-wide streets between them, named like a map (columns A–G west to east, rows 1–7 north to south; D4 is the Hall).
-  - **The plan:** on founding, the host surveys every plot (flatness, water), and the planner AI zones them (civic, market, homes, park, works) and picks one architectural style for every public building. Without the AI there's a default pattern.
-  - **Placement:** each new public work gets the nearest free plot in its zone. The plot is levelled first, and the design is recentred, turned to face the street toward the Hall and trimmed to its plot, so buildings never touch. The next ring of plots opens when the inner one fills.
-  - **Public infrastructure:** the cabinet can order `streets`: paving of the dirt streets next to built plots, with stone kerbs, plank bridges over water and lamp posts, built by citizens like any other work. It can also `rezone` a free plot.
-  - **Inspections:** after each opening, every so often while people are online, or on `/nation inspect`, an inspector photographs the city in a sandbox: an aerial view, street-level views of what named citizens see, and a night view. An AI reads the photos and scores looks, streets, green, night and services, writes citizens' reactions and proposes fixes. The cabinet gets it in its briefing; a poor score calls a meeting, and unhappy citizens add it to their grievances.
-  - **Photo reports:** `/report <what you see>` (or 📸 in the panel, or the MCP `report` action) sends the cabinet a photo of your view with your note.
-  - **Where to see it:** the panel's City tab (map, photos, voices, reports) and the Hall's screen between meetings.
-- **The court:** `/sue <name|government> <claim>` (or the MCP `sue` action). The AI judge reads the ledger and the laws, then rules. It can order compensation or strike down a law. Citizens owed wages sue the government on their own.
-- **Players and agents** take part with `/petition`, `/report`, `/sue`, `/propose` and `/vote`, the MCP `petition`, `report` and `sue` actions, or simply by talking to people.
+- **Citizens:** 16 rule-based people, each with a job, a wallet, needs, politics, a temper and a daily routine. No AI runs them.
+  - **Each simulated hour:** they eat (buying food from whoever is selling today), earn (public servants get a salary; builders are paid per block), pay tax, and decide how they feel.
+  - **When it goes badly:** they strike, then march on the town hall.
+  - **Their days:** the host walks each citizen's routine (work, market, park, home) on the real terrain with A* pathfinding, and reports every leg: detours, swimming, dark streets, half-built eyesores, monsters at night. Routines are data, so agents can propose new ones.
+- **Issues:**
+  - **Sources:** citizens' trips, the economy (prices, hunger, unpaid wages, idle builders, stalled projects, missing services), and players' and agents' photo reports and petitions all become issues on one board.
+  - **What each issue holds:** a severity, the people affected, their own words, numbers, and a street-level photo when the server has a camera.
+  - **Where to see them:** the panel's Issues tab, the Hall's screen, and `government status`.
+- **Proposals:**
+  - **Who proposes:** anyone can propose a fix from a catalogue the game carries out: laws, payments, footpaths with lamps and bridges along the best route, lamps, 11 kinds of public building drawn in code (`buildings.js`), finishing or taking down projects, rezoning, and citizens' routines.
+  - **Pricing:** the game prices each one and predicts what it changes.
+  - **The civil service:** it drafts the obvious fix for the worst issue.
+  - **Ministers:** agents can win a portfolio seat in a public vote. Their small fixes pass by consent.
+- **Grading:** residents grade A (excellent) to F (reject), with `/grade 7 B`, the Votes tab, Telegram buttons or `government grade`. The median grade wins.
+  - Small fixes by consent pass unless most residents object.
+  - Everything else needs a C or better, from humans and agents alike when both have voted.
+  - Citizens grade every proposal from what it does for them. If most give it F, it waits a round and the humans are pinged.
+  - `/delegate on` lets your own agent vote for you; agents can leave standing instructions.
+- **Carrying it out and checking:** passed proposals change laws, pay people, or become public works that citizens build block by block. When the work is done, the issue is measured again, and the proposal records whether it worked.
+- **City plan:** the capital is a grid of 24×24 plots around the Hall (D4), with 5-wide streets. Wet plots become parks or docks. Each building gets the nearest free plot in its zone, levelled and turned to face its street. `/nation inspect` audits the city: scores from measurements, plus aerial and street-level photos of the worst issues.
+- **Courts are votes now:** `/sue <name|government> <claim> [amount]` becomes a compensation proposal the residents grade.
+- **Telegram:** with `TELEGRAM_BOT_TOKEN` set, `/telegram` links your chat. At most 3 times a day, the game messages you when a decision needs a human, with A–F buttons and what happens by default.
+- **Players and agents** take part with `/issues`, `/fix <issue>`, `/grade`, `/report`, `/petition`, `/sue` and `/delegate`; the MCP `government` tool; the `act` actions `petition`, `report` and `sue`; or simply by talking to citizens with `@Name`.
+
+## The library
+
+Everything generated in the world (blocks, items, creatures, abilities, rules, structures, interactive UIs and games) is indexed with who made it and when; games also record plays and high scores. Browse it in-game, or search it with the MCP `library` tool before inventing something new.
 
 ## On-chain money (`chain.js`, `contracts/`)
 

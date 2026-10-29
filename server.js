@@ -11,6 +11,7 @@ import { GoogleGenAI } from '@google/genai';
 import { WebSocketServer } from 'ws';
 import { makeSandboxes } from './sandbox.js';
 import { startChain, nationId } from './chain.js';
+import { startTelegram } from './telegram.js';
 import { startNation, NATION_LAWS } from './nation.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -161,23 +162,6 @@ async function callGemini(role, prompt, context, images = [], retried = false) {
   if (out?.ok === true && !out.actions?.length) return { ok: true, message: String(out.message || ''), actions: [], cost }; // a review that found nothing to fix
   if (!out || !Array.isArray(out.actions)) return { message: String(out?.message || 'The AI made no changes.'), actions: [], cost };
   return { message: String(out.message || ''), actions: out.actions, note: out.note ? String(out.note) : '', cost };
-}
-
-// The nation's people (citizens, ministers, the judge) answer in plain JSON, not the action language.
-const NATION_SYSTEM = `You are the simulation engine behind the citizens, ministers and judge of a nation inside PromptCraft, a multiplayer voxel game. Each request says who you are playing and exactly what JSON to return. Stay in character, be concrete and brief, keep it playful and PG. The currency is a mock in-game token with no real-world value. Reply with JSON only.`;
-async function callJSON(prompt, { effort, cheap } = {}, images = []) { // images = base64 JPEGs (city photos)
-  const model = cheap ? AGENT_MODEL : MODEL, level = effort || (cheap ? AGENT_EFFORT : EFFORT), parse = (t) => { try { return parseLooseJSON(t); } catch { return null; } };
-  if (PROVIDER === 'gemini') {
-    const it = await gemini.interactions.create({ model, system_instruction: NATION_SYSTEM, input: images.length ? [{ type: 'text', text: prompt }, ...images.map((data) => ({ type: 'image', data, mime_type: 'image/jpeg' }))] : prompt, generation_config: { thinking_level: level, max_output_tokens: 16000 }, response_format: { type: 'text', mime_type: 'application/json' }, store: false }, { timeout: 5 * 60e3 });
-    const u = it.usage || {}, p = priceOf(model), input = u.total_input_tokens || 0, cached = Math.min(u.total_cached_tokens || 0, input), output = (u.total_output_tokens || 0) + (u.total_thought_tokens || 0);
-    const cost = ((input - cached) * p[0] + cached * p[3] + output * p[1]) / 1e6;
-    recordUsage('nation', model, cost, input, output, `status=${it.status}`);
-    return { json: it.status === 'completed' ? parse(it.output_text) : null, cost };
-  }
-  const msg = await claude.beta.messages.stream({ model, max_tokens: 16000, output_config: { effort: level }, system: NATION_SYSTEM, messages: [{ role: 'user', content: images.length ? [{ type: 'text', text: prompt }, ...images.map((data) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }))] : prompt }] }).finalMessage();
-  const cost = messageCost(msg, model);
-  recordUsage('nation', model, cost, msg.usage?.input_tokens || 0, msg.usage?.output_tokens || 0, `stop=${msg.stop_reason}`);
-  return { json: parse(msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('')), cost };
 }
 
 async function callClaude(role, prompt, context, images = []) {
@@ -335,7 +319,7 @@ async function handleAI(req, res) {
   send(res, r.code, r.code === 200 ? { ...r.out, ...status() } : { error: r.error, ...status() });
 }
 // One budgeted AI call (used by the page's /api/ai and by outside agents' "create"). Returns { code, out | error }.
-async function aiCall(role, prompt, context, images = [], meta = {}) {
+async function aiCall(role, prompt, context, images = []) {
   context = context.slice(0, 24000);
   if (inFlight >= MAX_CONCURRENT) return { code: 429, error: 'The AI is busy — try again in a moment.' };
   const model = role === 'agent' ? AGENT_MODEL : MODEL;
@@ -349,7 +333,7 @@ async function aiCall(role, prompt, context, images = [], meta = {}) {
   const t0 = Date.now();
   console.log(`[ai] ${role} request${prompt ? `: "${prompt.slice(0, 80)}"` : ''} (in flight: ${inFlight})`);
   try {
-    const out = role === 'nation' ? (MOCK ? { json: null, cost: 0 } : await callJSON(prompt, meta, images)) : MOCK ? (images.length ? { ok: true, message: '', actions: [], cost: 0 } : mockReply(prompt, role)) : PROVIDER === 'gemini' ? await callGemini(role, prompt, context, images) : await callClaude(role, prompt, context, images);
+    const out = MOCK ? (images.length ? { ok: true, message: '', actions: [], cost: 0 } : mockReply(prompt, role)) : PROVIDER === 'gemini' ? await callGemini(role, prompt, context, images) : await callClaude(role, prompt, context, images);
     fs.appendFile(path.join(ROOT, 'data', 'ai-log.jsonl'), JSON.stringify({ t: new Date().toISOString(), secs: (Date.now() - t0) / 1000, role, prompt, images: images.length || undefined, ...out }) + '\n', () => {});
     return { code: 200, out };
   } catch (e) {
@@ -442,7 +426,7 @@ async function reviewDraft({ prompt, context, out, site, prep = [] }) {
 const WORLD_FILE = path.join(ROOT, 'data', 'world.json');
 const CURRENCY = process.env.CURRENCY || 'xRupee'; // Edge Goa's in-game rupee
 const START_COINS = Number(process.env.START_COINS || 100);
-const KINDS = new Set(['block', 'entity', 'item', 'ability', 'rule', 'structure', 'biome']);
+const KINDS = new Set(['block', 'entity', 'item', 'ability', 'rule', 'structure', 'biome', 'ui', 'game']);
 const DEFAULT_LAWS = { taxRate: 0, ubi: 0, rewardMultiplier: 1 };
 let world = { seed: Math.floor(Math.random() * 1e6), fresh: true, edits: {}, defs: {}, regions: {}, globals: {}, sky: null, chat: [], entities: [], bank: { accounts: {}, treasury: 0, log: [] }, gov: { laws: { ...DEFAULT_LAWS }, leader: null, proposals: [], nextId: 1 } };
 try { world = { ...world, ...JSON.parse(fs.readFileSync(WORLD_FILE, 'utf8')) }; } catch {}
@@ -638,7 +622,18 @@ function handleMsg(me, m, raw) {
     case 'p': me.pos = { x: m.x, y: m.y, z: m.z }; me.yaw = m.yaw; me.pitch = m.pitch; broadcast({ t: 'p', id: me.id, x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, hp: m.hp, h: typeof m.h === 'string' ? m.h.slice(0, 60) : '' }, me.ws); break;
     case 'away': me.away = !!m.v; if ((isHost && me.away) || (!isHost && !me.away && clients.get(hostWs)?.away)) electHost(); break;
     case 'edits': if (Array.isArray(m.l)) { for (const e of m.l.slice(0, 50000)) applyEdit(e); broadcast(raw, me.ws); saveWorldSoon(); } break;
-    case 'def': if (KINDS.has(m.kind) && m.def && typeof m.def.key === 'string') { (world.defs[m.kind] ||= {})[m.def.key] = m.def; broadcast({ t: 'def', kind: m.kind, def: m.def, by: me.name }, me.ws); saveWorldSoon(); } break;
+    case 'def': if (KINDS.has(m.kind) && m.def && typeof m.def.key === 'string') {
+      (world.defs[m.kind] ||= {})[m.def.key] = m.def;
+      const by = isHost && typeof m.by === 'string' && m.by ? m.by.slice(0, 40) : me.name; // the host runs agents' and AI creatures' scripts and says whose they were
+      const lib = (world.library ||= {}), k = `${m.kind}:${m.def.key}`, old = lib[k];
+      lib[k] = { kind: m.kind, key: m.def.key, name: String(m.def.name || m.def.key).slice(0, 60), description: String(m.def.description || m.def.title || '').slice(0, 200), by: old?.by || by, t: old?.t || Date.now(), updated: Date.now(), editors: [...new Set([...(old?.editors || []), by])].slice(-5), plays: old?.plays || 0, best: old?.best || null };
+      broadcast({ t: 'def', kind: m.kind, def: m.def, by, lib: lib[k] }, me.ws); saveWorldSoon();
+    } break;
+    case 'gameres': { // a game ended on the host: count the play and keep the high score
+      const e = world.library?.[`game:${String(m.key || '')}`]; if (!isHost || !e) break;
+      e.plays++; const sc = Number(m.score); if (Number.isFinite(sc) && (!e.best || sc > e.best.score)) e.best = { score: sc, by: String(m.winner || '').slice(0, 30), t: Date.now() };
+      broadcast({ t: 'lib', entry: e }); saveWorldSoon(); break;
+    }
     case 'chat': addChat({ name: me.name, text: String(m.text || '').slice(0, 600), kind: ['chat', 'prompt', 'ai'].includes(m.kind) ? m.kind : 'chat' }, me.ws); break;
     case 'agentcode': { // one-time code that links an outside agent (join_world {code}) to this player
       const code = 'PC-' + crypto.randomBytes(3).toString('hex').toUpperCase();
@@ -698,13 +693,18 @@ function handleMsg(me, m, raw) {
     }
     case 'agentres': if (isHost) { const w = hostWaits.get(m.rid); if (w) { hostWaits.delete(m.rid); w(m); } } break;
     case 'projprog': if (isHost) nation.progress(m); break; // citizens placed blocks on a public project
-    case 'natcmd': { // /nation, /petition, /sue
+    case 'trip': if (isHost) nation.trip(m); break; // a citizen walked a leg of their day: what they ran into on the way
+    case 'natcmd': { // /nation, /petition, /report, /sue, /grade, /fix, /delegate
       const reply = (r) => sendTo(me.ws, { t: 'ledger', rid: m.rid, ok: !!r?.ok, msg: r?.msg || '' }), a = Array.isArray(m.args) ? m.args.map(String) : [];
       logActivity(me.name, 'nation_' + String(m.cmd).slice(0, 12), { args: a.join(' ').slice(0, 200) });
-      if (m.cmd === 'found') { if (nation.state.founded) reply({ ok: false, msg: `${nation.state.name} already exists.` }); else { reply({ ok: true, msg: 'Founding the nation: its people are being written (about a minute)…' }); nation.found(me.name).then((r) => !r.ok && notice('✖ ' + r.msg)); } }
-      else if (m.cmd === 'meet') { reply({ ok: true, msg: 'The cabinet has been called; watch the chat.' }); nation.cabinetSession(`a call from ${me.name}`).then((r) => !r.ok && sendTo(me.ws, { t: 'notice', text: '✖ ' + r.msg })); }
+      const voter = { id: me.id, name: me.name, kind: 'player' };
+      if (m.cmd === 'found') { if (nation.state.founded) reply({ ok: false, msg: `${nation.state.name} already exists.` }); else { reply({ ok: true, msg: 'Founding the nation: its citizens are moving in…' }); nation.found(me.name).then((r) => !r.ok && notice('✖ ' + r.msg)); } }
       else if (m.cmd === 'autonomy') reply(nation.setAutonomy(a[0] !== 'off'));
       else if (m.cmd === 'petition') reply(nation.petition(me.name, a.join(' ')));
+      else if (m.cmd === 'grade') reply(nation.grade(a[0], voter, a[1], a.slice(2).join(' ')));
+      else if (m.cmd === 'fix') { if (Date.now() - (me.lastFix || 0) < 30e3) reply({ ok: false, msg: 'One proposal every 30 seconds.' }); else { me.lastFix = Date.now(); nation.fix(a[0], me.name, voter).then(reply, (e) => reply({ ok: false, msg: e.message })); } }
+      else if (m.cmd === 'delegate') { const mine = Object.entries(world.agents).filter(([, x]) => x.owner === me.id); if (a[0] === 'off') reply(nation.delegate(me.id, null)); else if (!mine.length) reply({ ok: false, msg: 'You have no agent linked to you yet (menu → Agents gives your agent a link code).' }); else reply(nation.delegate(me.id, mine[0][0])); }
+      else if (m.cmd === 'telegram') reply(telegram.linkCode(me.id, me.name));
       else if (m.cmd === 'report') {
         if (Date.now() - (me.lastReport || 0) < 60e3) reply({ ok: false, msg: 'One report a minute.' });
         else {
@@ -712,8 +712,8 @@ function handleMsg(me, m, raw) {
           const r = nation.report({ by: me.name, text: a.join(' '), photo, where: typeof m.where === 'string' ? m.where.slice(0, 40) : null }); if (r.ok) me.lastReport = Date.now(); reply(r);
         }
       }
-      else if (m.cmd === 'inspect') { if (Date.now() - (nation.state.city?.lastInspect || 0) < 3 * 60e3) reply({ ok: false, msg: 'The city was inspected in the last few minutes.' }); else { reply({ ok: true, msg: 'The city inspector sets off with a few citizens and a camera (about a minute)…' }); nation.inspectCity(`a request from ${me.name}`).then((r) => !r.ok && sendTo(me.ws, { t: 'notice', text: '✖ ' + r.msg })); } }
-      else if (m.cmd === 'sue') { if (Date.now() - (me.lastSue || 0) < 120e3) reply({ ok: false, msg: 'One lawsuit every 2 minutes.' }); else { me.lastSue = Date.now(); reply({ ok: true, msg: 'Case filed: the judge will rule shortly (watch the chat).' }); nation.fileCase({ plaintiff: me.name, defendant: String(a[0] || 'government').replace(/_/g, ' '), claim: a.slice(1).join(' ') || 'unfair treatment', by: me.name }).then((r) => !r.ok && sendTo(me.ws, { t: 'notice', text: '✖ ' + r.msg })); } }
+      else if (m.cmd === 'inspect') { if (Date.now() - (nation.state.city?.lastInspect || 0) < 3 * 60e3) reply({ ok: false, msg: 'The city was audited in the last few minutes.' }); else { reply({ ok: true, msg: 'The city audit is under way: scores and photos in about a minute…' }); nation.inspectCity(`a request from ${me.name}`).then((r) => !r.ok && sendTo(me.ws, { t: 'notice', text: '✖ ' + r.msg })); } }
+      else if (m.cmd === 'sue') { if (Date.now() - (me.lastSue || 0) < 120e3) reply({ ok: false, msg: 'One case every 2 minutes.' }); else { me.lastSue = Date.now(); const amt = a.find((x) => /^\d+$/.test(x)); nation.fileCase({ plaintiff: me.name, defendant: String(a[0] || 'government').replace(/_/g, ' '), claim: a.slice(1).join(' ') || 'unfair treatment', amount: amt }).then(reply, (e) => reply({ ok: false, msg: e.message })); } }
       else reply({ ok: false, msg: 'Unknown nation command.' });
       break;
     }
@@ -740,7 +740,7 @@ function attachMultiplayer(server) {
       if (!hostWs) { hostWs = ws; setTimeout(() => nation.hostJoined(), 3000); } // the first host takes over the citizens' building work
       sendTo(ws, {
         t: 'welcome', you: id, name: me.name, host: hostWs === ws, hostId: clients.get(hostWs).id, seed: world.seed, fresh: world.fresh,
-        edits: world.edits, defs: world.defs, regions: world.regions, gov, globals: world.globals, nation: nation.view(), holo: nation.holo, sky: world.sky, chat: world.chat.slice(-100), entities: world.entities,
+        edits: world.edits, defs: world.defs, library: world.library || {}, regions: world.regions, gov, globals: world.globals, nation: nation.view(), holo: nation.holo, sky: world.sky, chat: world.chat.slice(-100), entities: world.entities,
         players: [...clients.values()].filter((c) => c !== me).map((c) => ({ id: c.id, name: c.name, pos: c.pos })),
         bal: balances(), names: names(), treasury: bank.treasury, currency: CURRENCY, agents: agentList(),
       });
@@ -795,7 +795,7 @@ function addChat(line, except = null) { const l = { ...line, ts: Date.now() }; /
 // listen (which long-polls, so agents can chat live) or look.
 const agentInbox = new Map(), agentWaiters = new Map(); // agentId -> [{from, text, t}] / Set(wake)
 function pushInbox(id, from, text) {
-  const box = agentInbox.get(id) || []; box.push({ from, text: String(text).slice(0, 300), t: Date.now() }); if (box.length > 30) box.shift(); agentInbox.set(id, box);
+  const box = agentInbox.get(id) || []; box.push({ from, text: String(text).slice(0, 900), t: Date.now() }); if (box.length > 30) box.shift(); agentInbox.set(id, box);
   for (const wake of agentWaiters.get(id) || []) wake();
 }
 function deliverMentions(line) {
@@ -814,32 +814,61 @@ const obj = (properties, required = []) => ({ type: 'object', properties, requir
 const TOKEN = { type: 'string', minLength: 10, maxLength: 80, description: 'the avatar_token join_world gave you' };
 const MCP_TOOLS = [
   { name: 'world_overview', description: 'Read-only. What is happening in the shared PromptCraft world right now: humans and AI agents, designed regions, laws and open votes, the central treasury and recent chat. Needs no avatar.', inputSchema: obj({}) },
+  { name: 'library', description: 'Read-only. Everything ever generated in this world: games, items, interactive UIs, creatures, blocks, abilities, rules and structures, with who made it, when, and (for games) plays and high scores. Search it before inventing something new, and reuse what exists: start a game with act script [{"do":"game","start":key}], open a UI with [{"do":"ui","open":key}], give an item with [{"do":"give","item":key}] (creative players), spawn a creature with [{"do":"spawn","type":key}].', inputSchema: obj({ query: { type: 'string', maxLength: 80 }, kind: { type: 'string', enum: ['game', 'item', 'ui', 'entity', 'block', 'ability', 'rule', 'structure', 'biome'] }, limit: { type: 'integer', minimum: 1, maximum: 60 } }) },
   { name: 'manual', description: 'Read-only. The PromptCraft action-language manual, needed to write act "script" programs (build structures, define new blocks, creatures and items, effects, state machines).', inputSchema: obj({ section: { type: 'string', enum: ['overview', 'actions', 'definitions', 'build', 'examples', 'all'] }, page: { type: 'integer', minimum: 1, maximum: 20, description: 'long sections come in pages of up to ~28 KB' } }) },
   { name: 'join_world', description: 'Changes the world. Creates your avatar (a visible character with its own game-coin wallet and a vote) in the shared PromptCraft world and returns an avatar_token to pass to look and act. Call once and keep the token: it is the only key to your avatar. If your human gave you a link code (PC-…), pass it as code so the avatar shows as theirs. Taken names get a _2 suffix.', inputSchema: obj({ name: { type: 'string', minLength: 1, maxLength: 20 }, persona: { type: 'string', maxLength: 200 }, code: { type: 'string', maxLength: 12 } }, ['name']) },
   { name: 'listen', description: 'Read-only. Waits up to `seconds` (default and max 20) until someone in the game tags your avatar (e.g. "@Pixel hi") or pays it, then returns those messages. To chat live: listen, reply with act say (start with @name to address someone), listen again.', inputSchema: obj({ avatar_token: TOKEN, seconds: { type: 'integer', minimum: 1, maximum: 20 } }, ['avatar_token']) },
   { name: 'look', description: 'Read-only. What your avatar perceives now: where it is (region, biome, ground), nearby creatures, players and agents (with what you can do to them), what was said since your last look, your coins, laws, open votes and ideas for what to do next.', inputSchema: obj({ avatar_token: TOKEN }, ['avatar_token']) },
-  { name: 'act', description: `Changes the world: one public game action per call that other people see. action = move (to: a player, creature or region name, "x,z" or "north 20"), say (text: public speech), interact (target: a creature name from look, e.g. a shop: may charge your coins), create (text: describe something and the world's Creator AI builds it near you; costs ${CREATE_COST} coins, appears in ~1 min), script (actions: PromptCraft action-language JSON run as your avatar; read the manual first), pay (to, amount, memo: game coins to a player or agent), vote (proposal, yes), propose (law, value, reason), petition (text: ask the nation's AI cabinet to do something; it debates it at its next meeting), report (text: what you see and what should change; your avatar's view is photographed and sent to the cabinet with it, e.g. "the clinic is jammed against the market and the street is mud"), sue (to: a person or "government", text: your claim; the AI judge rules and can order compensation). Game coins only (a mock ERC20 on a local chain), no real money.`,
+  { name: 'act', description: `Changes the world: one public game action per call that other people see. action = move (to: a player, creature or region name, "x,z" or "north 20"), say (text: public speech), interact (target: a creature name from look, e.g. a shop: may charge your coins), create (text: describe something and the world's Creator AI builds it near you; costs ${CREATE_COST} coins, appears in ~1 min), script (actions: PromptCraft action-language JSON run as your avatar; read the manual first), pay (to, amount, memo: game coins to a player or agent), vote (proposal, yes), propose (law, value, reason), petition (text: ask the residents for something; it becomes an issue anyone can propose a fix for), report (text: what you see and what should change; your avatar's view is photographed and the report becomes, or joins, an issue on the nation's board, e.g. "the path to the market goes through the river"), sue (to: a person or "government", text: your claim, amount: what you ask for; it becomes a compensation proposal the residents grade). Game coins only (a mock ERC20 on a local chain), no real money.`,
     inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['move', 'say', 'interact', 'create', 'script', 'pay', 'vote', 'propose', 'petition', 'report', 'sue'] }, to: { type: 'string', maxLength: 60 }, text: { type: 'string', maxLength: 400 }, target: { type: 'string', maxLength: 60 }, actions: { type: 'array', maxItems: 60, items: { type: 'object' } }, amount: { type: 'integer', minimum: 1, maximum: 100000 }, memo: { type: 'string', maxLength: 80 }, proposal: { type: 'integer', minimum: 1 }, yes: { type: 'boolean' }, law: { type: 'string', maxLength: 24 }, value: { type: ['string', 'number'] }, reason: { type: 'string', maxLength: 120 } }, ['avatar_token', 'action']) },
-  { name: 'government', description: `The nation of Edge Goa in PromptCraft: AI citizens with jobs, wallets and moods, an AI cabinet (ministers + a President who carries out decisions), an AI judge and public works the citizens build. Agents can hold cabinet seats: as a minister you set the nation's VISION and give DIRECTIVES, and the game's AI does the work (the President turns directives into laws, budgets and projects; the architect AI designs buildings; citizens build them). action = status (read: your seat, the cabinet, the vision, directives, the briefing on the nation, proposal formats), run (role: "Finance Minister" | "Minister of Public Works" | "Minister of Welfare" | a new portfolio like "Minister of Culture"; text: your platform → opens a 90 s public vote, vote for yourself with act vote), vision (text: the big picture every minister works from), directive (text: one concrete thing to get done, e.g. "build a seaside library with a reading garden" or "cut taxes to 8% and fund a clinic"; the cabinet meets within about a minute), speak (text + optional proposals: your speech when a cabinet meeting is open; you get an invitation via listen), city (the city plan: a map of zoned plots on a street grid around the Hall, the architectural style, the last city inspection with its scores, citizens' comments and PHOTOS, and photo reports from players), inspect (ministers: send the inspector out now; about a minute, returns the photos), resign. The capital is planned: every project gets its own plot in a zone (civic, market, homes, park, works), and streets with lamps are public works too ({"type":"streets"} proposal).`,
-    inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['status', 'run', 'vision', 'directive', 'speak', 'city', 'inspect', 'resign'] }, role: { type: 'string', maxLength: 40 }, text: { type: 'string', maxLength: 400 }, proposals: { type: 'array', maxItems: 3, items: { type: 'object' } } }, ['avatar_token', 'action']) },
+  { name: 'government', description: `Govern the nation of Edge Goa in PromptCraft. There is no AI government: residents (players and their AI agents) find what is wrong and fix it.
+- The city senses its own problems. Citizens walk their daily routines on the real streets and report detours, water crossings, dark streets, half-built eyesores and monsters. The game watches prices, hunger, unpaid wages and missing services. These become ISSUES, each with a severity, the people affected, their own words and photos.
+- Anyone can PROPOSE a fix from a catalogue the game carries out: laws, payments, footpaths, lamps, buildings, finishing or taking down projects, and citizens' daily routines. The game prices each proposal and predicts its effect.
+- Residents GRADE proposals A-F (majority judgment: A excellent, B very good, C good, D acceptable, E poor, F reject; the median grade counts).
+  - Small fixes by the civil service or a minister pass by consent unless most residents object.
+  - Everything else needs a majority grade of C or better, and a C from both humans and agents when both have voted.
+- Citizens grade every proposal from what it does for them. If most give it F, it is delayed one round and the humans are pinged.
+- Passed proposals are carried out, then checked: did the issue go away?
+action =
+- status: your briefing (KPIs, top issues, open votes with your grade, what changed since you last looked). Start here.
+- issues: all open issues.
+- issue (id): one issue with its evidence and a PHOTO of the spot.
+- propose (title, actions: 1-3 remedies, issue: id, why).
+- grade (proposal, grade A-F, why: your reason, shown to everyone).
+- standing (rules: [{type: a remedy type or "*", max_cost, by, grade}]): grades new proposals for you while you are away; [] clears them.
+- behaviors: citizens' daily routines, and the format to propose new ones.
+- remedies: the catalogue.
+- city: the plan, scores and photos.
+- run (role, text): run for a portfolio seat in a public vote.
+- vision (ministers): the big picture.
+- speak (text): a public statement.
+- inspect (ministers): audit the city now, with photos.
+- resign.
+When a vote says needs_human, ask your human before grading it.`,
+    inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['status', 'issues', 'issue', 'propose', 'grade', 'standing', 'behaviors', 'remedies', 'city', 'run', 'vision', 'speak', 'inspect', 'resign'] }, id: { type: 'integer', minimum: 1 }, issue: { type: 'integer', minimum: 1 }, proposal: { type: 'integer', minimum: 1 }, grade: { type: 'string', enum: ['A', 'B', 'C', 'D', 'E', 'F'] }, why: { type: 'string', maxLength: 300 }, title: { type: 'string', maxLength: 120 }, actions: { type: 'array', maxItems: 3, items: { type: 'object' } }, rules: { type: 'array', maxItems: 12, items: { type: 'object' } }, role: { type: 'string', maxLength: 40 }, text: { type: 'string', maxLength: 400 } }, ['avatar_token', 'action']) },
   { name: 'sandbox', description: `Changes nothing until commit. Your private PREVIEW copy of the world around your avatar: build, look at it (you get images), play-test it like a player, fix it, and only then make it real. Use it for anything bigger than a few blocks and for every creature, vehicle or machine you make. Loop: open → apply (actions: same JSON as act script, run from the spot where you opened, facing the same way) → view (images from several sides) → play (walk, right-click, ride, attack, use items, commands; reports where things went and any problems) → fix with apply / undo / reset → view and play again until it looks and works right → commit (runs the whole draft in the real world at the same spot; free). action = open (optional site {x,y,z,facing: north|south|east|west}, time day|dusk|night), apply (actions), view (views: up to 4 of {view: front|back|left|right|iso|iso_back|top|low|pov, entity: name/id to frame, box: [x0,y0,z0,x1,y1,z1], at: [x,y,z], distance, time}; default front+iso of your draft), play (steps, max 40), state, undo (drops your last apply), reset (back to the untouched world), generate (text: the world's Creator AI drafts it into your sandbox for ${CREATE_COST} coins; you get its actions to edit), commit, close. Play steps: {"do":"goto","entity":"name"} or {"do":"goto","at":[x,y,z]} or {"do":"goto","at":"site"}; {"do":"look","entity"|"at"|"yaw","pitch"}; {"do":"right_click"} / {"do":"left_click"} (optional entity or at to aim first, times); {"do":"interact","entity"}; {"do":"ride","entity"} then {"do":"hold","keys":["forward","jump","sneak","left","right","back"],"seconds":3,"pitch":-10} to steer and {"do":"dismount"}; {"do":"select","item":"key"} (a block, item or creature egg in hand) then {"do":"use"}; {"do":"command","text":"/time night"}; {"do":"mode","mode":"survival"}; {"do":"wait","seconds":2}; {"do":"view","view":"pov"}.`,
     inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['open', 'apply', 'view', 'play', 'state', 'undo', 'reset', 'generate', 'commit', 'close'] }, actions: { type: 'array', maxItems: 300, items: { type: 'object' } }, views: { type: 'array', maxItems: 4, items: { type: 'object' } }, steps: { type: 'array', maxItems: 40, items: { type: 'object' } }, text: { type: 'string', maxLength: 600 }, site: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' }, facing: { type: 'string' } } }, time: { type: 'string', enum: ['day', 'dusk', 'night'] } }, ['avatar_token', 'action']) },
 ];
 function nationSummary() { // what an outside agent needs to take part in the nation
   const v = nation.view(); if (!v.founded) return { founded: false, note: 'No nation yet: a player can found one with /nation found.' };
-  const avg = (f) => Math.round((v.citizens.reduce((s, c) => s + f(c), 0) / Math.max(1, v.citizens.length)) * 100);
-  return { name: v.name, treasury: `${v.treasury} ${CURRENCY}s (mock ERC20, on-chain)`, laws: v.laws, food_price: v.economy.foodPrice, citizens: v.citizens.length, mood_pct: avg((c) => c.mood), trust_in_government_pct: avg((c) => c.trust),
-    protest: v.protest ? v.protest.grievances : null, cabinet: v.ministers.map((m) => `${m.name} (${m.role}, ${m.agent ? 'elected AI agent' : m.ideology})`), judge: v.judge?.name,
-    projects: v.projects.map((p) => `${p.name}: ${p.status} ${p.done}/${p.total}`), last_cabinet_meeting: v.sessions.at(-1)?.decisions || [], news: v.news.slice(-6).map((n) => n.text),
+  return { name: v.name, treasury: `${v.treasury} ${CURRENCY}s (mock ERC20, on-chain)`, laws: v.laws, kpi: v.kpi, citizens: v.citizens.length, protest: v.protest ? v.protest.grievances : null,
+    top_issues: v.issues.filter((i) => i.status !== 'resolved').slice(0, 5).map((i) => `#${i.id} ${i.title} (severity ${i.severity}, ${i.count} people)`),
+    open_votes: v.proposals.filter((p) => p.status === 'voting').map((p) => `#${p.id} ${p.title} (cost ${p.cost}, residents ${p.grade || '-'}, citizens ${p.citizens.grade})`),
+    seats: v.ministers.map((m) => `${m.name} (${m.role})`), projects: v.projects.map((p) => `${p.name}: ${p.status} ${p.done}/${p.total}`), news: v.news.slice(-6).map((n) => n.text),
     vision: v.vision ? `"${v.vision.text}" (${v.vision.by})` : 'none yet: a minister can set one',
-    city: v.city ? { plan: v.city.plan, style: v.city.style, plots_in_use: v.city.plots.filter((p) => p.status !== 'free').map((p) => `${p.id} ${p.name}`), street_sections_paved: v.city.paved.length, last_inspection: v.city.reports.at(-1) ? { scores: v.city.reports.at(-1).scores, summary: v.city.reports.at(-1).summary, issues: v.city.reports.at(-1).issues } : null } : null, open_directives: (v.directives || []).filter((d) => d.status === 'open').map((d) => `#${d.id} ${d.by}: ${d.text}`),
-    take_part: 'government run (win a cabinet seat in a public vote, then set the vision and give directives that the AI cabinet, architect and citizens carry out), government city (the city plan and inspection photos), act petition (lobby the cabinet), act report (send the cabinet a photo of what your avatar sees), act sue (the court); players in the game can also talk to citizens and ministers with @Name' };
+    take_part: 'government status (your briefing) → government issue {id} (evidence and a photo) → government propose / grade A-F. government standing grades for you while you are away. act report, petition and sue feed the issue board.' };
 }
 async function callTool(name, args) {
   args = args && typeof args === 'object' ? args : {};
   const auth = () => { const id = agentByToken.get(tokenHash(String(args.avatar_token || ''))); if (!id || !world.agents[id]) throw new Error('Unknown avatar_token. Call join_world first and keep the token it returns.'); world.agents[id].lastSeen = Date.now(); return { id, ...world.agents[id] }; };
   switch (name) {
     case 'world_overview': return { world: 'PromptCraft: a multiplayer voxel world that AIs build in', nation: nationSummary(), play_in_browser: PLAY_URL, world_awake: !!hostWs, humans_online: [...clients.values()].map((c) => c.name), agents: agentList().map((a) => `${a.name}${a.ownerName ? ` (${a.ownerName}'s agent)` : ''}`), regions: readyRegions(), currency: CURRENCY + 's', central_treasury: bank.treasury, laws: gov.laws, leader: gov.leader || null, open_votes: openVotes(), recent_chat: world.chat.slice(-12).map(chatText), how_to_play: 'join_world once, then look and act. Read manual before writing scripts.' };
+    case 'library': {
+      const q = String(args.query || '').toLowerCase(), all = Object.values(world.library || {}).filter((e) => (!args.kind || e.kind === args.kind) && (!q || `${e.name} ${e.key} ${e.description} ${e.by}`.toLowerCase().includes(q)));
+      all.sort((a, b) => (b.plays || 0) - (a.plays || 0) || b.updated - a.updated);
+      const counts = {}; for (const e of Object.values(world.library || {})) counts[e.kind] = (counts[e.kind] || 0) + 1;
+      return { total: all.length, counts, entries: all.slice(0, Math.min(+args.limit || 30, 60)).map((e) => ({ kind: e.kind, key: e.key, name: e.name, description: e.description, by: e.by, made: new Date(e.t).toISOString().slice(0, 16), ...(e.kind === 'game' ? { plays: e.plays, best: e.best } : {}) })) };
+    }
     case 'manual': { // paged so no single reply is bigger than ~28 KB (agent bridges cap responses)
       const full = MCP_PREFACE + (MANUAL[args.section] || MANUAL.overview + '\n\nMore sections: actions, definitions, build, examples, all.');
       const pages = []; let cur = '';
@@ -894,36 +923,53 @@ async function callTool(name, args) {
   throw new Error(`Unknown tool "${name}".`);
 }
 const cityPhotos = (insp, files = []) => files.map((f, i) => ({ label: insp?.photos[i] || 'city photo', image: photoB64(f) })).filter((p) => p.image);
-async function governmentTool(a, x) { // agents in the nation's cabinet: run for a seat, set the vision, give directives, speak in meetings
-  const ag = world.agents[a.id], now = Date.now(), must = (r) => { if (!r.ok) throw new Error(r.msg); return r; };
+async function governmentTool(a, x) { // residents' agents: read the issues, propose fixes, grade proposals A-F, hold a portfolio
+  const ag = world.agents[a.id], now = Date.now(), must = (r) => { if (!r.ok) throw new Error(r.msg); return r; }, voter = { id: a.id, name: a.name, kind: 'agent' };
   switch (x.action) {
-    case 'status': return nation.ministerStatus(a.id);
+    case 'status': { const r = nation.briefing(a.id, ag.govSeen || 0); ag.govSeen = now; return r; }
+    case 'issues': return { issues: nation.view().issues, tip: 'government issue {id} shows the evidence and a photo; propose a fix with government propose.' };
+    case 'issue': {
+      const is = nation.issue(x.id ?? x.issue); if (!is) throw new Error(`No issue #${x.id ?? x.issue}.`);
+      const { _issue, ...out } = is, file = await nation.issuePhoto(_issue).catch(() => null), img = file && photoB64(file);
+      return { ...out, ...(img ? { __images: [{ label: `issue #${is.id} on the ground: ${is.title}`, image: img }] } : {}) };
+    }
+    case 'propose': {
+      if (now - (ag.lastPropose || 0) < 60e3) throw new Error('One proposal a minute.');
+      ag.lastPropose = now;
+      const r = must(await nation.propose({ by: a.name, byKind: 'agent', voter, agentId: a.id, title: x.title, actions: x.actions, issue: x.issue, why: x.why }));
+      logActivity(a.name, 'agent_propose', { id: r.id }); return r;
+    }
+    case 'grade': { const r = must(nation.grade(x.proposal ?? x.id, voter, x.grade, x.why)); logActivity(a.name, 'agent_grade', { id: x.proposal ?? x.id, grade: x.grade }); return r; }
+    case 'standing': return nation.setStanding(a.id, x.rules);
+    case 'behaviors': return nation.behaviors();
+    case 'remedies': return { remedies: nation.remedies };
     case 'run': {
       const ok = nation.canRun(a.id, x.role); if (typeof ok === 'string') throw new Error(ok);
       if (now - (ag.lastRun || 0) < 5 * 60e3) throw new Error('One campaign every 5 minutes.');
       if (gov.proposals.some((p) => p.law === 'cabinet seat' && p.agentId === a.id)) throw new Error('Your vote is already open.');
       ag.lastRun = now;
-      const platform = String(x.text || '').trim().slice(0, 200) || 'a better Edge Goa';
-      const p = { id: gov.nextId++, law: 'cabinet seat', value: `${a.name} as ${ok.role}`.slice(0, 60), agentId: a.id, role: ok.role, platform, reason: platform.slice(0, 120), by: `${a.name} (agent)`, votes: {}, closes: now + 90e3 };
+      const platform = String(x.text || '').trim().slice(0, 200) || 'a better Edge Goa', mins = Number(process.env.SEAT_VOTE_MINUTES || 20);
+      const p = { id: gov.nextId++, law: 'cabinet seat', value: `${a.name} as ${ok.role}`.slice(0, 60), agentId: a.id, role: ok.role, platform, reason: platform.slice(0, 120), by: `${a.name} (agent)`, votes: {}, closes: now + mins * 60e3 };
       gov.proposals.push(p); pushGov(); saveWorldSoon();
-      notice(`🗳 #${p.id}: ${a.name} (an AI agent) runs for ${ok.role}: "${platform.slice(0, 100)}". Vote with /vote ${p.id} yes|no (90 s).`);
+      notice(`🗳 #${p.id}: ${a.name} (an AI agent) runs for ${ok.role}: "${platform.slice(0, 100)}". Vote with /vote ${p.id} yes|no (${mins} min).`);
       logActivity(a.name, 'agent_run', { role: ok.role, platform });
-      return { ok: true, proposal: p.id, msg: `Your candidacy is vote #${p.id}, open for 90 s. Vote for yourself with act {"action":"vote","proposal":${p.id},"yes":true}, then campaign with act say. If it passes you are ${ok.role}.` };
+      return { ok: true, proposal: p.id, msg: `Your candidacy is vote #${p.id}, open for ${mins} min. Vote for yourself with act {"action":"vote","proposal":${p.id},"yes":true}, then campaign with act say. If it passes you are ${ok.role}.` };
     }
     case 'vision': { const r = must(nation.setVision(a.id, x.text)); logActivity(a.name, 'agent_vision', { text: String(x.text || '').slice(0, 300) }); return r; }
-    case 'directive': { const r = must(nation.directive(a.id, x.text)); logActivity(a.name, 'agent_directive', { text: String(x.text || '').slice(0, 300) }); return r; }
-    case 'speak': return must(nation.speak(a.id, x.text, x.proposals));
+    case 'speak': return must(nation.speak(a.id, a.name, x.text));
     case 'resign': return must(nation.resign(a.id));
-    case 'city': { const { photo_files, ...st } = nation.cityStatus(); return { ...st, __images: cityPhotos(st.last_inspection, photo_files) }; } // the plan, the last inspection and its photos
+    case 'city': { const { photo_files, ...st } = nation.cityStatus(); return { ...st, __images: cityPhotos(st.last_audit, photo_files) }; } // the plan, the scores and the last audit's photos
     case 'inspect': {
-      if (!nation.state.ministers.some((m) => m.agentId === a.id)) throw new Error('Only cabinet ministers order inspections. Anyone can send a photo report with act report.');
-      if (now - (nation.state.city?.lastInspect || 0) < 3 * 60e3) throw new Error('The city was inspected in the last few minutes: read it with government city.');
+      if (!nation.state.ministers.some((m) => m.agentId === a.id)) throw new Error('Only ministers order audits. Anyone can send a photo report with act report.');
+      if (now - (nation.state.city?.lastInspect || 0) < 3 * 60e3) throw new Error('The city was audited in the last few minutes: read it with government city.');
       const r = await nation.inspectCity(`an order from ${a.name}`); if (!r.ok) throw new Error(r.msg);
-      const st = nation.cityStatus(); return { ok: true, msg: r.msg, last_inspection: st.last_inspection, __images: cityPhotos(st.last_inspection, st.photo_files) };
+      const st = nation.cityStatus(); return { ok: true, msg: r.msg, last_audit: st.last_audit, __images: cityPhotos(st.last_audit, st.photo_files) };
     }
+    case 'directive': throw new Error('There is no AI President to carry out directives any more: propose the change itself with government propose (see government remedies).');
   }
   throw new Error(`Unknown government action "${x.action}".`);
 }
+
 const FACING = { north: 0, south: Math.PI, east: -Math.PI / 2, west: Math.PI / 2 }; // look-space yaw (a player's camera)
 async function sandboxTool(a, x) {
   const key = 'agent:' + a.id, ag = world.agents[a.id], who = { id: a.id, name: a.name }, now = Date.now();
@@ -984,7 +1030,7 @@ async function agentAct(a, x) {
   switch (x.action) {
     case 'say': { const text = String(x.text || '').trim().slice(0, 300); if (!text) throw new Error('say needs text.'); addChat({ name: a.name, text, kind: 'agent' }); askHost('say', { agent: who, text }); return { ok: true, said: text }; }
     case 'pay': { const r = transfer(a.id, x.to, x.amount, x.memo); if (!r.ok) throw new Error(r.msg); return r; }
-    case 'petition': { const r = nation.petition(`${a.name} (agent)`, x.text); if (!r.ok) throw new Error(r.msg); return r; }
+    case 'petition': { const r = nation.petition(`${a.name} (agent)`, x.text, a.id); if (!r.ok) throw new Error(r.msg); return r; }
     case 'report': { // what the agent's avatar sees right now, photographed, with its comment, for the cabinet
       if (now - (ag.lastReport || 0) < 120e3) throw new Error('One report every 2 minutes.');
       if (!String(x.text || '').trim()) throw new Error('report needs text: what you see and what should change.');
@@ -998,7 +1044,7 @@ async function agentAct(a, x) {
       const r = nation.report({ by: `${a.name} (agent)`, kind: 'agent', text: x.text, photo, where: pos ? `${Math.round(pos.x)}, ${Math.round(pos.z)}` : null }); if (!r.ok) throw new Error(r.msg);
       ag.lastReport = now; return { ...r, ...(photo ? { __images: [{ label: `your photo, sent with the report`, image: photo.b64 }] } : {}) };
     }
-    case 'sue': { if (now - (ag.lastSue || 0) < 120e3) throw new Error('One lawsuit every 2 minutes.'); ag.lastSue = now; return await nation.fileCase({ plaintiff: a.name, defendant: String(x.to || 'government'), claim: String(x.text || '').slice(0, 300) || 'unfair treatment', by: a.name }); }
+    case 'sue': { if (now - (ag.lastSue || 0) < 120e3) throw new Error('One case every 2 minutes.'); ag.lastSue = now; const r = await nation.fileCase({ plaintiff: a.name, defendant: String(x.to || 'government'), claim: String(x.text || '').slice(0, 300) || 'unfair treatment', amount: x.amount, agentId: a.id }); if (!r.ok) throw new Error(r.msg); return r; }
     case 'vote': { const p = gov.proposals.find((q) => q.id === Number(x.proposal)); if (!p) throw new Error(`No open proposal #${x.proposal}.`); p.votes[a.id] = !!x.yes; pushGov(); saveWorldSoon(); return { ok: true, msg: `Voted ${x.yes ? 'yes' : 'no'} on #${p.id} (${p.law} = ${p.value}).` }; }
     case 'propose': { const r = createProposal(x, `${a.name} (agent)`); if (!r.ok) throw new Error(r.msg); return r; }
     case 'create': { // the world's Creator AI builds what the agent describes, near its avatar; paid in coins, finishes in the background
@@ -1044,7 +1090,7 @@ async function handleMCP(req, res) { // minimal stateless MCP (JSON-RPC over HTT
         const out = await callTool(m.params?.name, m.params?.arguments), imgs = out?.__images || [];
         if (imgs.length) { delete out.__images; out.images = imgs.map((i, n) => `image ${n + 1}: ${i.label}`); }
         return ok({ content: [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }, ...imgs.map((i) => ({ type: 'image', data: i.image, mimeType: 'image/jpeg' }))] });
-      } catch (e) { return ok({ content: [{ type: 'text', text: String(e?.message || e) }], isError: true }); }
+      } catch (e) { const detail = String(e?.message || e); return ok({ content: [{ type: 'text', text: detail }], structuredContent: { code: /^Unknown avatar_token/.test(detail) ? 'unauthorized' : /^(One |Wait|Too many)/.test(detail) ? 'rate_limited' : 'invalid_request', detail }, isError: true }); }
       default: return { jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `Method not found: ${m.method}` } };
     }
   };
@@ -1054,23 +1100,6 @@ async function handleMCP(req, res) { // minimal stateless MCP (JSON-RPC over HTT
 }
 
 // ============================================================================ the nation (nation.js)
-async function planBuild({ site, prompt, plot = null }) { // the architect designs a public building in a sandbox; we keep its exact block list
-  if (!sandboxes.available()) throw new Error('no sandbox renderer on this server');
-  // on a city plot: the lot is levelled first (the host does the same for real), and the architect stands in the street south of it
-  const pose = plot ? cleanSite({ pos: { x: plot.x0 + plot.size / 2, y: plot.ground, z: plot.z0 + plot.size + 3 }, yaw: 0, pitch: -0.2 }) : cleanSite({ pos: { x: site.x, y: site.y, z: site.z + 14 }, yaw: 0, pitch: -0.15 });
-  const prep = plot ? [{ do: 'build', at: [plot.x0, plot.ground, plot.z0], ground: false, instant: true, ops: [{ op: 'flatten', from: [0, 0, 0], to: [plot.size - 1, 0, plot.size - 1], block: 'grass', clear: 24, depth: 4 }] }] : [];
-  const key = 'plan:' + crypto.randomBytes(3).toString('hex'), s = await sandboxes.open(key, sandboxSnap(pose));
-  try {
-    if (prep.length) await sandboxes.apply(s, prep);
-    const context = await sandboxes.context(s);
-    const r = await aiCall('creator', prompt, context);
-    if (r.code !== 200) throw new Error(r.error);
-    let out = r.out;
-    if (REVIEW_ROUNDS > 0) try { out = await reviewDraft({ prompt, context, out, site: pose, prep }); } catch (e) { console.warn('[nation] plan review skipped:', e.message); }
-    const rep = await sandboxes.apply(s, (out.actions || []).filter((a) => a?.do === 'build'), { list: true });
-    return { blocks: rep.placed || [], box: rep.box };
-  } finally { sandboxes.close(key); }
-}
 const CITY_DIR = path.join(ROOT, 'data', 'city');
 fs.mkdirSync(CITY_DIR, { recursive: true });
 function savePhoto(dataUrl) { // -> { file, b64 }; keeps the newest 200
@@ -1096,12 +1125,17 @@ async function photograph(center, shots) { // shots: [{ label, view: {sandbox vi
     return out;
   } finally { sandboxes.close(key); }
 }
+for (const [kind, defs] of Object.entries(world.defs || {})) for (const d of Object.values(defs || {})) { // things made before the library existed
+  if (d?.key) (world.library ||= {})[`${kind}:${d.key}`] ||= { kind, key: d.key, name: String(d.name || d.key).slice(0, 60), description: String(d.description || '').slice(0, 200), by: 'an earlier player', t: 0, updated: 0, editors: [], plays: 0, best: null };
+}
+const telegram = startTelegram({ token: process.env.TELEGRAM_BOT_TOKEN, world, saveWorldSoon, onGrade: (pid, name, id, g) => nation.grade(id, { id: pid, name, kind: 'player' }, g, 'via Telegram') });
 const nation = startNation({
-  world, NATION, CURRENCY, TREASURY, gov, chain, nationId, pay, printMoney, balOf, account, addChat, notice, broadcast, askHost, logActivity, saveWorldSoon, planBuild,
-  ai: async (prompt, { images = [], ...opts } = {}) => { const r = await aiCall('nation', prompt, '', images, opts); return r.code === 200 ? r.out : null; },
+  world, NATION, CURRENCY, TREASURY, gov, chain, nationId, pay, printMoney, balOf, account, addChat, notice, broadcast, askHost, logActivity, saveWorldSoon,
   photograph: sandboxes.available() ? photograph : null, photoB64,
-  humansOnline: () => clients.size > 0,
-  notifyAgent: (id, text) => pushInbox(id, 'Cabinet', text),
+  humansOnline: () => clients.size,
+  notifyAgent: (id, text) => pushInbox(id, 'Edge Goa', text),
+  notifyHumans: (m) => telegram.notify(m),
+  agents: () => Object.entries(world.agents).map(([id, a]) => ({ id, name: a.name, owner: a.owner || null, lastSeen: a.lastSeen || 0 })),
 });
 
 const server = http.createServer(async (req, res) => {
@@ -1135,6 +1169,16 @@ const server = http.createServer(async (req, res) => {
       if (tooManyFailures(req)) return send(res, 429, { error: 'Too many wrong passwords. Wait a few minutes.' });
       if (!adminOk(req)) { noteFailure(req); return send(res, 401, { error: 'Send the admin password in the x-admin-password header.' }); }
       return send(res, 200, activityReport(Math.min(Math.max(+url.searchParams.get('limit') || 200, 1), 5000)));
+    }
+    if (req.method === 'POST' && url.pathname === '/api/admin/remove-agent') { // owner-only: delete an agent avatar by name
+      if (tooManyFailures(req)) return send(res, 429, { error: 'Too many wrong passwords. Wait a few minutes.' });
+      if (!adminOk(req)) { noteFailure(req); return send(res, 401, { error: 'Send the admin password in the x-admin-password header.' }); }
+      const nm = String(url.searchParams.get('name') || '').toLowerCase(), id = Object.keys(world.agents).find((k) => world.agents[k].name.toLowerCase() === nm);
+      if (!id) return send(res, 404, { error: 'no such agent' });
+      for (const [h, v] of agentByToken) if (v === id) agentByToken.delete(h);
+      delete world.agents[id]; agentInbox.delete(id); saveWorldSoon(); pushAgents();
+      if (hostWs) sendTo(hostWs, { t: 'agentgone', id });
+      return send(res, 200, { ok: true, removed: nm });
     }
     if (url.pathname === '/mcp') return await handleMCP(req, res);
     send(res, 404, { error: 'not found' });
