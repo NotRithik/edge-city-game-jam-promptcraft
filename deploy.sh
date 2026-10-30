@@ -13,7 +13,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 SSH=(ssh -i "$KEY" -o BatchMode=yes)
 
 echo "→ syncing files"
-rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude data --exclude .env --exclude .git --exclude public/img --exclude .vercel "$DIR/" "$HOST:~/$NAME/"
+rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude data --exclude .env --exclude .git --exclude public/img --exclude .vercel --exclude public/promptcraft-demo.mp4 "$DIR/" "$HOST:~/$NAME/"
 scp -q -i "$KEY" -o BatchMode=yes "$DIR/.env" "$HOST:~/$NAME/.env"
 
 echo "→ building and (re)starting the container"
