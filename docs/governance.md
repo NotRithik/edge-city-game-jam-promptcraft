@@ -25,12 +25,17 @@ Nothing in that loop is a score. There are no severity numbers, no dashboards an
 - **Their days.** Routines are data: at 7 go to work, at 12 eat at the market, at 17 relax in the park, at 21 go home and sleep. The host browser walks them on the real terrain along the best route, so the people really climb the hills, swim the creeks and walk the dark streets.
 - **A moment.** Now and then, usually after a walk, a citizen gets a *moment*. The server takes two or three photos from their own eyes along the walk they just made, and asks their mind what they make of it. With the photos come what they remember, their money, whether they've eaten today, what neighbours said lately, the noticeboard and the open proposals.
 - **What they can do with a moment:**
-  - say something out loud (a speech bubble above them, and the town chat);
+  - say something out loud (a speech bubble above their head);
+  - take up a pastime ("🎣 fishing off the rocks"), shown over their head while they're out;
+  - make something next to them: a bench, a bonfire, a sandcastle, a stall, a mural… or their own design, up to 250 blocks, listed in the library;
+  - go somewhere they choose: the beach, the park, a friend;
   - pin a note to the noticeboard with one of their photos: a complaint, an idea or praise;
   - agree with a note someone else pinned;
   - suggest a fix the town knows how to build: a proper road along the walk they just did, lamps, finishing a stalled building, a new public building;
   - grade open proposals A–F, with a reason;
   - remember something for next time, and say how they feel, in a word.
+- **Mostly they just live.** Their instructions ask them to live a life rather than file reports: chat, plan things with friends, enjoy the town, make things for it, and complain only when something really bothers them.
+- **Talking to them.** When a player says something that names a citizen, or near one, that citizen gets a quick chat moment, and their mind decides whether to answer. Players can't give them orders: what a player says never makes a citizen grade, pin or protest.
 - **The town's economy** keeps running in the background: citizens eat, earn wages and salaries, pay tax, and buy food from whoever is selling today.
 
 ## The noticeboard
