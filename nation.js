@@ -80,7 +80,7 @@ export function startNation(ctx) {
   const busy = { founding: false, inspect: false };
   const cits = () => Object.values(N.citizens);
   const law = (k) => clamp(+gov.laws[k] || 0, NATION_LAWS[k][0], NATION_LAWS[k][1]);
-  function news(text, icon = '📰', chat = true) { N.news.push({ t: Date.now(), text: `${icon} ${text}` }); if (N.news.length > 60) N.news.shift(); if (chat) addChat({ name: N.name, text: `${icon} ${text}`, kind: 'ai' }); push(); } // chat: false keeps it to the J panel
+  function news(text, icon = '📰', chat = true) { const line = text.startsWith(icon) ? text : `${icon} ${text}`; N.news.push({ t: Date.now(), text: line }); if (N.news.length > 60) N.news.shift(); if (chat) addChat({ name: N.name, text: line, kind: 'ai' }); push(); } // chat: false keeps it to the J panel
   const behaviorOf = (occ) => N.behaviors[occ] || (BEHAVIORS[occ] ? { ...BEHAVIORS[occ], version: 0, by: 'the founding charter' } : { ...BEHAVIORS.default, version: 0, by: 'the founding charter' });
   const view = () => ({ name: N.name, founded: N.founded, capital: N.capital, autonomy: N.autonomy, treasury: balOf(TREASURY), currency: CURRENCY, laws: Object.fromEntries(Object.keys(NATION_LAWS).map((k) => [k, law(k)])), economy: { foodPrice: r2(N.economy.foodPrice) },
     citizens: cits().map((c) => ({ id: c.id, name: c.name, age: c.age, occupation: c.occupation, personality: c.personality, wants: c.wants, mood: c.moodWord || null, said: c.said || null, doing: c.doing || null, status: c.status, job: c.job, home: c.home, coins: balOf(c.id), look: c.look, thinking: MIND.queue.some((m) => m.cit === c.id) })),
