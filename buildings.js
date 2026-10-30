@@ -119,3 +119,37 @@ export function design(kind, { name = '', seed = name, palette = {} } = {}) {
   }
   return [...out.values()].filter((b) => b[3] !== 'air'); // the plot is levelled first, so there is nothing to clear
 }
+
+// Small things citizens make for fun (a bench, a bonfire, a sandcastle...). [x, y, z, block] around the spot they pick:
+// y 0 sits on the ground, everything within x and z -3..3.
+export const PROPS = {
+  bench: 'a wooden bench', flowers: 'a flower bed', lantern: 'a lantern post', fountain: 'a little fountain', swing: 'a swing',
+  stall: 'a food stall with a striped awning', bonfire: 'a bonfire ring', sandcastle: 'a sandcastle', statue: 'a statue on a plinth',
+  garden: 'a vegetable patch', picnic: 'a picnic table', mural: 'a painted mural wall', arch: 'a leafy arch',
+};
+const PROP_WORDS = [['bench', /bench|seat/], ['flowers', /flower|blossom|bloom|plant/], ['lantern', /lantern|lamp|light/], ['fountain', /fountain|pond|well/], ['swing', /swing|playground/],
+  ['stall', /stall|stand|kiosk|cart|shop|chai|snack/], ['bonfire', /bonfire|camp ?fire|fire ?pit|barbecue|bbq/], ['sandcastle', /sand ?castle|castle/], ['statue', /statue|sculpture|monument|bust/],
+  ['garden', /garden|veg|patch|herb|farm/], ['picnic', /picnic|table/], ['mural', /mural|paint|art|wall|graffiti/], ['arch', /arch|pergola|gate|bower/]];
+export const propOf = (text) => PROP_WORDS.find(([, re]) => re.test(String(text || '').toLowerCase()))?.[0] || null;
+const WOOLS = ['red_wool', 'orange_wool', 'yellow_wool', 'green_wool', 'blue_wool', 'purple_wool', 'pink_wool', 'white_wool'];
+export function prop(kind, seed = '') {
+  const R = rng(seed + kind), out = [], put = (x, y, z, k) => out.push([x, y, z, k]), pick = (l) => l[Math.floor(R() * l.length)];
+  const box = (x0, y0, z0, x1, y1, z1, k) => { for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) put(x, y, z, k); };
+  switch (kind) {
+    case 'bench': box(-1, 0, 0, 1, 0, 0, 'planks'); box(-1, 1, -1, 1, 1, -1, 'planks'); put(-2, 0, 0, 'log'); put(2, 0, 0, 'log'); break;
+    case 'flowers': box(-2, 0, -1, 2, 0, 1, 'log'); box(-1, 0, 0, 1, 0, 0, 'dirt'); for (let x = -1; x <= 1; x++) put(x, 1, 0, pick(WOOLS.slice(0, 7))); break;
+    case 'lantern': put(0, 0, 0, 'log'); put(0, 1, 0, 'log'); put(0, 2, 0, 'log'); put(0, 3, 0, 'glowstone'); break;
+    case 'fountain': for (let z = -2; z <= 2; z++) for (let x = -2; x <= 2; x++) if (Math.max(Math.abs(x), Math.abs(z)) === 2) put(x, 0, z, 'stone_bricks'); else put(x, 0, z, 'water'); box(0, 0, 0, 0, 1, 0, 'stone_bricks'); put(0, 2, 0, 'glowstone'); break;
+    case 'swing': box(-2, 0, 0, -2, 2, 0, 'log'); box(2, 0, 0, 2, 2, 0, 'log'); box(-2, 3, 0, 2, 3, 0, 'planks'); put(0, 1, 0, 'planks'); break;
+    case 'stall': { const a = pick(WOOLS.slice(0, 6)); box(-1, 0, 1, 1, 0, 1, 'planks'); for (const [x, z] of [[-2, -1], [2, -1], [-2, 1], [2, 1]]) box(x, 0, z, x, 2, z, 'log'); for (let x = -2; x <= 2; x++) box(x, 3, -1, x, 3, 1, x % 2 ? a : 'white_wool'); put(0, 1, 1, 'crafting_table'); break; }
+    case 'bonfire': for (let z = -1; z <= 1; z++) for (let x = -1; x <= 1; x++) put(x, 0, z, x || z ? 'cobblestone' : 'glowstone'); put(0, 1, 0, 'orange_wool'); put(-2, 0, 0, 'log'); put(2, 0, 0, 'log'); break;
+    case 'sandcastle': box(-1, 0, -1, 1, 0, 1, 'sand'); for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) put(x, 1, z, 'sand'); box(0, 1, 0, 0, 2, 0, 'sand'); put(0, 3, 0, pick(['red_wool', 'yellow_wool', 'blue_wool'])); break;
+    case 'statue': put(0, 0, 0, 'stone_bricks'); box(0, 1, 0, 0, 2, 0, 'stone'); put(0, 3, 0, pick(['gold_block', 'stone', 'diamond_block'])); put(-1, 2, 0, 'stone'); put(1, 2, 0, 'stone'); break;
+    case 'garden': box(-2, 0, -1, 2, 0, 1, 'log'); box(-1, 0, -1, 1, 0, 1, 'dirt'); for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z += 2) put(x, 1, z, R() < 0.3 ? 'orange_wool' : 'green_wool'); break;
+    case 'picnic': box(-1, 1, 0, 1, 1, 0, 'planks'); put(-1, 0, 0, 'log'); put(1, 0, 0, 'log'); box(-1, 0, -2, 1, 0, -2, 'planks'); box(-1, 0, 2, 1, 0, 2, 'planks'); break;
+    case 'mural': for (let y = 0; y <= 2; y++) for (let x = -2; x <= 2; x++) put(x, y, 0, y === 0 ? 'stone_bricks' : pick(WOOLS)); break;
+    case 'arch': box(-2, 0, 0, -2, 2, 0, 'log'); box(2, 0, 0, 2, 2, 0, 'log'); box(-2, 3, 0, 2, 3, 0, 'leaves'); put(-1, 3, -1, 'leaves'); put(1, 3, 1, 'leaves'); put(0, 4, 0, 'leaves'); break;
+    default: return [];
+  }
+  return out;
+}

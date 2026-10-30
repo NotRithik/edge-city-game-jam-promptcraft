@@ -4,7 +4,8 @@ This folder runs the citizens of Edge Goa (the town in PromptCraft) as Claude Ha
 
 How it works:
 - The game server walks each citizen through their day. After a walk, now and then, it takes photos from the citizen's own eyes and queues a **moment**.
-- A mind claims the moment with the MCP tool `citizens` (`action: next`) and answers as that citizen (`action: answer`). The citizen can say something, pin a note with a photo, back a neighbour's note, suggest a fix, grade open votes, or say whether a fix worked.
+- A mind claims the moment with the MCP tool `citizens` (`action: next`) and answers as that citizen (`action: answer`). Mostly they just live: chat in a bubble over their head, take up pastimes, make fun things (a bonfire, a bench, a sandcastle...). When something bothers them they pin a note with a photo, back a neighbour's note, suggest a fix, grade open votes, or say whether a fix worked.
+- When a player talks to a citizen (by name, or near them), that citizen gets a chat moment and their mind decides whether to answer.
 - Only whoever hosts the server can do this: it needs the server's `NPC_KEY`. Keep it in `~/.config/promptcraft/npc_key`. `.mcp.json` sends it as a header when `PROMPTCRAFT_NPC_KEY` is set; otherwise pass it as `key`.
 
 Two ways to run it:

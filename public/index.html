@@ -3844,7 +3844,7 @@ function onNet(m) {
       case 'gov': net.gov = m.gov; break;
       case 'nation': net.nation = m.n; hallViz.dirty = true; if (uiMode === 'nation') renderNation(); break;
       case 'cabinet': onCabinet(m); break;
-      case 'citsay': { const e = natEntity(m.cit, m.name); if (e) { speak(e, m.text, 8, true, true); if (isHost()) { speechLog.push({ name: e.name, text: String(m.text).slice(0, 220), pos: P3(e.pos), t: Date.now() }); if (speechLog.length > 60) speechLog.shift(); } } break; }
+      case 'citsay': { const e = natEntity(m.cit, m.name); if (e) { speak(e, m.text, clamp(4 + String(m.text).length / 12, 6, 14), true, true); if (isHost()) { speechLog.push({ name: e.name, text: String(m.text).slice(0, 220), pos: P3(e.pos), t: Date.now() }); if (speechLog.length > 60) speechLog.shift(); } } break; }
       case 'snap': { const e = natEntity(m.cit); if (e) { emojiBurst(e.eye(), '📸', 1, 0.8); burst(e.eye(), '#ffffff', 14, 3, 0.1, 0.35, 0); } break; }
       case 'agentgone': for (const e of [...entities]) if (e.vars?._agent === m.id && !e.dead) removeEntity(e); break;
       case 'holo': setHolo(m.holo); break;
@@ -3916,7 +3916,7 @@ function viewContext(e) { // Creator context for an agent's "create" request, se
 }
 function hostAgentOp(m) {
   const reply = (ok, msg, data) => netSend({ t: 'agentres', rid: m.rid, ok, msg, data });
-  if (['found', 'project', 'projectStatus', 'hall', 'survey', 'streets', 'routes', 'pathBlocks', 'lamps', 'visit'].includes(m.op)) { try { return hostNationOp(m, reply); } catch (err) { return reply(false, String(err?.message || err)); } }
+  if (['found', 'project', 'projectStatus', 'hall', 'survey', 'streets', 'routes', 'pathBlocks', 'lamps', 'visit', 'make'].includes(m.op)) { try { return hostNationOp(m, reply); } catch (err) { return reply(false, String(err?.message || err)); } }
   try {
     const e = agentAvatar(m.agent || {}); if (!e) return reply(false, 'Could not place your avatar (the world is full of creatures).');
     switch (m.op) {
@@ -4803,12 +4803,13 @@ function natBeach(home) { // the nearest dry spot next to the water
   return null;
 }
 function natRoutine(p, e, st, t) { // the citizen's day: walk to each step's place, then stay and do the thing
+  if (st.stay && t < st.stay) { if (t > (st.fxT || 0)) { st.fxT = t + 10 + Math.random() * 12; if (/^\p{Extended_Pictographic}/u.test(p.doing || '')) emojiBurst(e.eye(), [...p.doing][0], 1, 0.6); } return; } // somewhere they chose to be
   const day = routineOf(p), hr = gameHour(), s = day.filter((x) => +x.at <= hr).pop() || day[day.length - 1];
   const key = `${Math.floor((Date.now() / 1000 + (+globals._clock || 0)) / DAY_LEN)}|${s.at}|${s.go}`;
   if (st.stepKey !== key) { st.stepKey = key; const q = natPlace(p, String(s.go || 'home'), st); natLeg(p, e, st, q, String(s.go || 'home'), String(s.do || ''), t); }
   if (st.leg && !st.leg.done) return natWalk(p, e, st, t);
   if (s.do === 'sleep' || s.do === 'relax') { if (!e.moveGoal) e.sitting = true; } else e.sitting = false;
-  if (t > (st.fxT || 0)) { st.fxT = t + 10 + Math.random() * 12; const em = DO_FX[s.do]; if (em) emojiBurst(e.eye(), em, 1, 0.6); if (s.do === 'work') e.swing = 0.3; }
+  if (t > (st.fxT || 0)) { st.fxT = t + 10 + Math.random() * 12; const own = s.do !== 'sleep' && s.do !== 'work' && /^\p{Extended_Pictographic}/u.test(p.doing || '') ? [...p.doing][0] : null, em = own || DO_FX[s.do]; if (em) emojiBurst(e.eye(), em, 1, 0.6); if (s.do === 'work') e.swing = 0.3; } // their pastime (set by their mind) while they're out
 }
 function natCommute(p, e, st, P, t) { // a builder walks the route to their site (and it's reported like any other walk); then workProjects takes over
   const n = net.nation, v = (n.projects || []).find((x) => x.id === P.id), pl = v?.plot && n.city?.plots?.find((q) => q.id === v.plot), key = `work|${P.id}`, to = pl ? plotFront(pl, n.city) : P.site;
@@ -4850,15 +4851,24 @@ function natVisit(p, e, st, t) { // a visit the server asked for: walk to the st
   if (V.stage === 0) { V.stage = 1; natLeg(p, e, st, Math.hypot(V.from.x - e.pos.x, V.from.z - e.pos.z) > 3 ? V.from : null, 'visit', 'go', t); if (st.leg) st.leg.quiet = true; }
   if (st.leg && !st.leg.done) { natWalk(p, e, st, t); return true; }
   if (V.stage === 1) { V.stage = 2; natLeg(p, e, st, V.to, V.dest || 'visit', 'go', t); if (st.leg) { st.leg.visit = V.note; return true; } }
-  st.visit = null; st.stepKey = null; return false; // back to the day's routine
+  st.visit = null; st.stepKey = null; if (V.note == null) st.stay = t + 90; return false; // back to the day's routine (after a while, if they chose to come here)
 }
 function hostNationOp(m, reply) {
   switch (m.op) {
+    case 'make': { // a citizen makes something fun next to where they stand: a flat, dry, unpaved spot, built a block at a time
+      const e = natEntity(m.cit), c = e ? e.pos : m.near; if (!c || !Array.isArray(m.blocks) || !m.blocks.length) return reply(false, 'Nobody to make it.');
+      const ok = (x, z) => { let lo = 1e9, hi = -1; for (let dz = -4; dz <= 4; dz++) for (let dx = -4; dx <= 4; dx++) { const y = surfaceY(x + dx, z + dz), k = BLOCKS[getBlock(x + dx, y, z + dz)]?.key; if (y <= SEA || ['water', 'cobblestone', 'stone_bricks', 'planks', 'gravel', 'glowstone'].includes(k)) return null; lo = Math.min(lo, y); hi = Math.max(hi, y); } return hi - lo <= 1 ? hi : null; };
+      let at = null; for (let r = 4; r <= 14 && !at; r++) for (let a = 0; a < 8 && !at; a++) { const x = Math.floor(c.x + Math.cos(a * Math.PI / 4) * r), z = Math.floor(c.z + Math.sin(a * Math.PI / 4) * r); ensureArea(x, z); const y = ok(x, z); if (y !== null) at = { x, y: y + 1, z }; }
+      if (!at) return reply(false, 'No free spot nearby.');
+      startBuild(m.blocks.map(([x, y, z, k]) => ({ op: 'set', at: [x, y, z], block: k })), at, { speed: 4 });
+      if (e) { e.sitting = false; e.swing = 0.5; e.moveGoal = { x: at.x + 0.5, y: at.y, z: at.z + 3.5 }; emojiBurst(e.eye(), '🎨', 2, 0.8); }
+      return reply(true, 'making it', { at: { x: at.x, z: at.z } });
+    }
     case 'visit': { // a citizen goes to see a place again (a note they wrote, now fixed)
-      const e = natEntity(m.cit), pt = (q) => q && Number.isFinite(+q.x) && Number.isFinite(+q.z) ? { x: +q.x, z: +q.z } : null, from = pt(m.from), to = pt(m.to);
-      if (!e || !from || !to) return reply(false, e ? 'visit needs from and to' : 'That citizen is not out and about right now.');
+      const e = natEntity(m.cit), pt = (q) => q && Number.isFinite(+q.x) && Number.isFinite(+q.z) ? { x: +q.x, z: +q.z } : null, from = pt(m.from), to = pt(m.to) || (m.beach && e ? natBeach(e.pos) : null);
+      if (!e || !to) return reply(false, e ? 'There is nowhere like that nearby.' : 'That citizen is not out and about right now.');
       const st = NAT.people.get(m.cit) || {}; NAT.people.set(m.cit, st);
-      st.visit = { from, to, note: m.note ?? true, dest: m.dest ? String(m.dest).slice(0, 20) : null, stage: 0 }; st.leg = null; st.stepKey = null; e.sitting = false;
+      st.visit = { from, to, note: m.note ?? null, dest: m.dest ? String(m.dest).slice(0, 20) : null, stage: from ? 0 : 1 }; st.leg = null; st.stepKey = null; st.stay = 0; e.sitting = false; // from: walk there first (to see a fixed route); none: a place they chose to go
       return reply(true, 'on the way');
     }
     case 'found': { // a flat, dry spot near the world spawn for the capital, and homes around it
@@ -5161,7 +5171,7 @@ function renderNation() {
   } else if (natTab === 'people') {
     const day = (c) => routineOf(c).map((x) => `${x.at}h ${x.go}${x.do ? ` (${x.do})` : ''}`).join(' · ');
     const occs = [...new Set(cs.map((c) => c.occupation))], B = n.behaviors || {};
-    body = `<table class="ntable"><tr><th></th><th>Citizen</th><th>Job</th><th>Feeling</th><th>Coins</th><th>Lately</th></tr>${cs.map((c) => `<tr title="${esc(c.personality || '')} · wants: ${esc((c.wants || []).join(', '))} · day: ${esc(day(c))}"><td>${moodEmoji(c.mood) || '🙂'}${c.thinking ? '💭' : ''}</td><td>${esc(c.name)} <small>${c.age}</small></td><td>${esc(c.occupation)}</td><td>${esc(c.mood || '–')}</td><td>${c.coins}</td><td>${c.status !== 'idle' ? `<small>${esc(c.status)}</small><br>` : ''}${c.said ? `“${esc(c.said)}”` : '<small>–</small>'}</td></tr>`).join('')}</table>
+    body = `<table class="ntable"><tr><th></th><th>Citizen</th><th>Job</th><th>Feeling</th><th>Coins</th><th>Lately</th></tr>${cs.map((c) => `<tr title="${esc(c.personality || '')} · wants: ${esc((c.wants || []).join(', '))} · day: ${esc(day(c))}"><td>${moodEmoji(c.mood) || '🙂'}${c.thinking ? '💭' : ''}</td><td>${esc(c.name)} <small>${c.age}</small></td><td>${esc(c.occupation)}</td><td>${esc(c.mood || '–')}</td><td>${c.coins}</td><td>${c.status !== 'idle' ? `<small>${esc(c.status)}</small><br>` : ''}${c.doing ? `<small>${esc(c.doing)}</small><br>` : ''}${c.said ? `“${esc(c.said)}”` : '<small>–</small>'}</td></tr>`).join('')}</table>${(n.made || []).length ? `<p><b>Made lately</b>: ${n.made.slice().reverse().map((x) => `🎨 ${esc(x.by)}: ${esc(x.kind)}${x.name ? ` “${esc(x.name)}”` : ''}`).join(' · ')}</p>` : ''}
       <p><b>Daily routines</b> <small>(residents can rewrite one with a <code>behavior</code> proposal)</small></p>${occs.map((o) => { const b = B[o] || B.default; return `<p><small><b>${esc(o)}</b>${b?.by ? ` <i>(v${b.version || 1} by ${esc(b.by)})</i>` : ''}: ${esc(day({ occupation: o }))}</small></p>`; }).join('')}`;
   } else if (natTab === 'projects') {
     body = (n.projects || []).length ? n.projects.slice().reverse().map((p) => `<p><b>#${p.id} ${esc(p.name)}</b> <small>${p.plot ? `plot ${esc(p.plot)} (${esc(p.zone || '')}) · ` : ''}${esc(p.purpose || '')}${p.site ? ` · at ${p.site.x}, ${p.site.z} (/tp ${p.site.x} ${p.site.y + 4} ${p.site.z + 12})` : ''}</small><br>${esc(p.status)}${p.total ? ` · ${p.done}/${p.total} blocks ${bar(p.done / p.total, '#fc4')}` : ''} · spent ${p.spent}/${p.budget} · ${(p.workers || []).length} workers${p.note ? `<br><small>${esc(p.note)}</small>` : ''}</p>`).join('') : '<p>No public works yet.</p>';
