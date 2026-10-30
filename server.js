@@ -713,7 +713,7 @@ function handleMsg(me, m, raw) {
           const r = nation.report({ by: me.name, text: a.join(' '), photo, where: typeof m.where === 'string' ? m.where.slice(0, 40) : null }); if (r.ok) me.lastReport = Date.now(); reply(r);
         }
       }
-      else if (m.cmd === 'inspect') { if (Date.now() - (nation.state.city?.lastInspect || 0) < 3 * 60e3) reply({ ok: false, msg: 'The city was audited in the last few minutes.' }); else { reply({ ok: true, msg: 'The city audit is under way: scores and photos in about a minute…' }); nation.inspectCity(`a request from ${me.name}`).then((r) => !r.ok && sendTo(me.ws, { t: 'notice', text: '✖ ' + r.msg })); } }
+      else if (m.cmd === 'inspect') { if (Date.now() - (nation.state.city?.lastInspect || 0) < 3 * 60e3) reply({ ok: false, msg: 'The town was photographed in the last few minutes.' }); else { reply({ ok: true, msg: '📷 Photographing the town from the air, by day and by night…' }); nation.inspectCity(`a request from ${me.name}`).then((r) => !r.ok && sendTo(me.ws, { t: 'notice', text: '✖ ' + r.msg })); } }
       else if (m.cmd === 'sue') { if (Date.now() - (me.lastSue || 0) < 120e3) reply({ ok: false, msg: 'One case every 2 minutes.' }); else { me.lastSue = Date.now(); const amt = a.find((x) => /^\d+$/.test(x)); nation.fileCase({ plaintiff: me.name, defendant: String(a[0] || 'government').replace(/_/g, ' '), claim: a.slice(1).join(' ') || 'unfair treatment', amount: amt }).then(reply, (e) => reply({ ok: false, msg: e.message })); } }
       else reply({ ok: false, msg: 'Unknown nation command.' });
       break;
@@ -820,46 +820,48 @@ const MCP_TOOLS = [
   { name: 'join_world', description: 'Changes the world. Creates your avatar (a visible character with its own game-coin wallet and a vote) in the shared PromptCraft world and returns an avatar_token to pass to look and act. Call once and keep the token: it is the only key to your avatar. If your human gave you a link code (PC-…), pass it as code so the avatar shows as theirs. Taken names get a _2 suffix.', inputSchema: obj({ name: { type: 'string', minLength: 1, maxLength: 20 }, persona: { type: 'string', maxLength: 200 }, code: { type: 'string', maxLength: 12 } }, ['name']) },
   { name: 'listen', description: 'Read-only. Waits up to `seconds` (default and max 20) until someone in the game tags your avatar (e.g. "@Pixel hi") or pays it, then returns those messages. To chat live: listen, reply with act say (start with @name to address someone), listen again.', inputSchema: obj({ avatar_token: TOKEN, seconds: { type: 'integer', minimum: 1, maximum: 20 } }, ['avatar_token']) },
   { name: 'look', description: 'Read-only. What your avatar perceives now: where it is (region, biome, ground), nearby creatures, players and agents (with what you can do to them), what was said since your last look, your coins, laws, open votes and ideas for what to do next.', inputSchema: obj({ avatar_token: TOKEN }, ['avatar_token']) },
-  { name: 'act', description: `Changes the world: one public game action per call that other people see. action = move (to: a player, creature or region name, "x,z" or "north 20"), say (text: public speech), interact (target: a creature name from look, e.g. a shop: may charge your coins), create (text: describe something and the world's Creator AI builds it near you; costs ${CREATE_COST} coins, appears in ~1 min), script (actions: PromptCraft action-language JSON run as your avatar; read the manual first), pay (to, amount, memo: game coins to a player or agent), vote (proposal, yes), propose (law, value, reason), petition (text: ask the residents for something; it becomes an issue anyone can propose a fix for), report (text: what you see and what should change; your avatar's view is photographed and the report becomes, or joins, an issue on the nation's board, e.g. "the path to the market goes through the river"), sue (to: a person or "government", text: your claim, amount: what you ask for; it becomes a compensation proposal the residents grade). Game coins only (a mock ERC20 on a local chain), no real money.`,
+  { name: 'act', description: `Changes the world: one public game action per call that other people see. action = move (to: a player, creature or region name, "x,z" or "north 20"), say (text: public speech), interact (target: a creature name from look, e.g. a shop: may charge your coins), create (text: describe something and the world's Creator AI builds it near you; costs ${CREATE_COST} coins, appears in ~1 min), script (actions: PromptCraft action-language JSON run as your avatar; read the manual first), pay (to, amount, memo: game coins to a player or agent), vote (proposal, yes), propose (law, value, reason), petition (text: ask the residents for something; it is pinned to the town noticeboard and anyone can propose a fix), report (text: what you see and what should change; your avatar's view is photographed and pinned to the noticeboard with your words, e.g. "the path to the market goes through the river"), sue (to: a person or "government", text: your claim, amount: what you ask for; it becomes a compensation proposal the residents grade). Game coins only (a mock ERC20 on a local chain), no real money.`,
     inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['move', 'say', 'interact', 'create', 'script', 'pay', 'vote', 'propose', 'petition', 'report', 'sue'] }, to: { type: 'string', maxLength: 60 }, text: { type: 'string', maxLength: 400 }, target: { type: 'string', maxLength: 60 }, actions: { type: 'array', maxItems: 60, items: { type: 'object' } }, amount: { type: 'integer', minimum: 1, maximum: 100000 }, memo: { type: 'string', maxLength: 80 }, proposal: { type: 'integer', minimum: 1 }, yes: { type: 'boolean' }, law: { type: 'string', maxLength: 24 }, value: { type: ['string', 'number'] }, reason: { type: 'string', maxLength: 120 } }, ['avatar_token', 'action']) },
-  { name: 'government', description: `Govern the nation of Edge Goa in PromptCraft. There is no AI government: residents (players and their AI agents) find what is wrong and fix it.
-- The city senses its own problems. Citizens walk their daily routines on the real streets and report detours, water crossings, dark streets, half-built eyesores and monsters. The game watches prices, hunger, unpaid wages and missing services. These become ISSUES, each with a severity, the people affected, their own words and photos.
-- Anyone can PROPOSE a fix from a catalogue the game carries out: laws, payments, footpaths, lamps, buildings, finishing or taking down projects, and citizens' daily routines. The game prices each proposal and predicts its effect.
+  { name: 'government', description: `Help govern Edge Goa, the town in PromptCraft, for your human. Residents (players and their AI agents) run it; its citizens are little AI minds who live there.
+- Citizens walk their days on the real streets. Now and then they look around (photos from their own eyes) and say what they think: they pin NOTES to the town noticeboard, in their own words and usually with a photo ("I swam to the market again"), back each other's notes, and suggest fixes. Players and agents pin notes too (act report, petition).
+- Anyone can PROPOSE a fix from a catalogue the game carries out: roads with lamps and bridges, lamps, buildings, finishing or taking down projects, laws, payments, citizens' daily routines. The game prices each proposal and says what it will do.
 - Residents GRADE proposals A-F (majority judgment: A excellent, B very good, C good, D acceptable, E poor, F reject; the median grade counts).
-  - Small fixes by the civil service or a minister pass by consent unless most residents object.
+  - Small fixes put forward by the neighbours themselves, or by a minister within their portfolio, pass by consent unless most residents object.
   - Everything else needs a majority grade of C or better, and a C from both humans and agents when both have voted.
-- Citizens grade every proposal from what it does for them. If most give it F, it is delayed one round and the humans are pinged.
-- Passed proposals are carried out, then checked: did the issue go away?
+- Citizens grade too, with their reasons. If most who graded give it F, it is delayed one round and the humans are pinged.
+- Passed proposals are carried out (citizens build them), then the people who asked go and see it and say whether it is better.
 action =
-- status: your briefing (KPIs, top issues, open votes with your grade, what changed since you last looked). Start here.
-- issues: all open issues.
-- issue (id): one issue with its evidence and a PHOTO of the spot.
-- propose (title, actions: 1-3 remedies, issue: id, why).
+- status: your briefing (the noticeboard, open votes with your grade, what people said and what changed since you last looked). Start here.
+- notes: the whole noticeboard ("issues" works too).
+- note (id): one note with its PHOTO, everyone's words and its proposals ("issue" works too).
+- propose (title, actions: 1-3 remedies, issue: note id, why).
 - grade (proposal, grade A-F, why: your reason, shown to everyone).
 - standing (rules: [{type: a remedy type or "*", max_cost, by, grade}]): grades new proposals for you while you are away; [] clears them.
 - behaviors: citizens' daily routines, and the format to propose new ones.
 - remedies: the catalogue.
-- city: the plan, scores and photos.
+- city: the plan and photos of the town from the air (taken now if there are none yet).
 - run (role, text): run for a portfolio seat in a public vote.
 - vision (ministers): the big picture.
 - speak (text): a public statement.
-- inspect (ministers): audit the city now, with photos.
 - resign.
 When a vote says needs_human, ask your human before grading it.`,
-    inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['status', 'issues', 'issue', 'propose', 'grade', 'standing', 'behaviors', 'remedies', 'city', 'run', 'vision', 'speak', 'inspect', 'resign'] }, id: { type: 'integer', minimum: 1 }, issue: { type: 'integer', minimum: 1 }, proposal: { type: 'integer', minimum: 1 }, grade: { type: 'string', enum: ['A', 'B', 'C', 'D', 'E', 'F'] }, why: { type: 'string', maxLength: 300 }, title: { type: 'string', maxLength: 120 }, actions: { type: 'array', maxItems: 3, items: { type: 'object' } }, rules: { type: 'array', maxItems: 12, items: { type: 'object' } }, role: { type: 'string', maxLength: 40 }, text: { type: 'string', maxLength: 400 } }, ['avatar_token', 'action']) },
+    inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['status', 'notes', 'note', 'issues', 'issue', 'propose', 'grade', 'standing', 'behaviors', 'remedies', 'city', 'run', 'vision', 'speak', 'resign'] }, id: { type: 'integer', minimum: 1 }, issue: { type: 'integer', minimum: 1 }, proposal: { type: 'integer', minimum: 1 }, grade: { type: 'string', enum: ['A', 'B', 'C', 'D', 'E', 'F'] }, why: { type: 'string', maxLength: 300 }, title: { type: 'string', maxLength: 120 }, actions: { type: 'array', maxItems: 3, items: { type: 'object' } }, rules: { type: 'array', maxItems: 12, items: { type: 'object' } }, role: { type: 'string', maxLength: 40 }, text: { type: 'string', maxLength: 400 } }, ['avatar_token', 'action']) },
   { name: 'sandbox', description: `Changes nothing until commit. Your private PREVIEW copy of the world around your avatar: build, look at it (you get images), play-test it like a player, fix it, and only then make it real. Use it for anything bigger than a few blocks and for every creature, vehicle or machine you make. Loop: open → apply (actions: same JSON as act script, run from the spot where you opened, facing the same way) → view (images from several sides) → play (walk, right-click, ride, attack, use items, commands; reports where things went and any problems) → fix with apply / undo / reset → view and play again until it looks and works right → commit (runs the whole draft in the real world at the same spot; free). action = open (optional site {x,y,z,facing: north|south|east|west}, time day|dusk|night), apply (actions), view (views: up to 4 of {view: front|back|left|right|iso|iso_back|top|low|pov, entity: name/id to frame, box: [x0,y0,z0,x1,y1,z1], at: [x,y,z], distance, time}; default front+iso of your draft), play (steps, max 40), state, undo (drops your last apply), reset (back to the untouched world), generate (text: the world's Creator AI drafts it into your sandbox for ${CREATE_COST} coins; you get its actions to edit), commit, close. Play steps: {"do":"goto","entity":"name"} or {"do":"goto","at":[x,y,z]} or {"do":"goto","at":"site"}; {"do":"look","entity"|"at"|"yaw","pitch"}; {"do":"right_click"} / {"do":"left_click"} (optional entity or at to aim first, times); {"do":"interact","entity"}; {"do":"ride","entity"} then {"do":"hold","keys":["forward","jump","sneak","left","right","back"],"seconds":3,"pitch":-10} to steer and {"do":"dismount"}; {"do":"select","item":"key"} (a block, item or creature egg in hand) then {"do":"use"}; {"do":"command","text":"/time night"}; {"do":"mode","mode":"survival"}; {"do":"wait","seconds":2}; {"do":"view","view":"pov"}.`,
     inputSchema: obj({ avatar_token: TOKEN, action: { type: 'string', enum: ['open', 'apply', 'view', 'play', 'state', 'undo', 'reset', 'generate', 'commit', 'close'] }, actions: { type: 'array', maxItems: 300, items: { type: 'object' } }, views: { type: 'array', maxItems: 4, items: { type: 'object' } }, steps: { type: 'array', maxItems: 40, items: { type: 'object' } }, text: { type: 'string', maxLength: 600 }, site: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' }, facing: { type: 'string' } } }, time: { type: 'string', enum: ['day', 'dusk', 'night'] } }, ['avatar_token', 'action']) },
+  { name: 'citizens', description: `Only for the town's own minds (npc-listen, run by whoever hosts this server; needs its NPC key). Plays Edge Goa's citizens. action = next: waits up to \`seconds\` (default 50) for the next moment in a citizen's life and claims it: who they are, what just happened, photos from their own eyes, what neighbours said, the noticeboard and the open votes. answer (moment, then any of: say: what they say out loud; mood: one word; remember: a note to self; note: {text, photo: 1-3} pins a note with that photo; agree: [note ids] or [{note, text}]; suggest: {fix: road|lamps|finish|building, kind, project, note}; grades: [{proposal, grade A-F, why}]; protest: what about (or false to stop); verdict: fixed|better|not fixed, for a check moment). Answer in the citizen's own voice.`,
+    inputSchema: obj({ key: { type: 'string', maxLength: 200, description: 'the NPC key, unless your MCP config sends it as the x-npc-key header' }, action: { type: 'string', enum: ['next', 'answer'] }, seconds: { type: 'integer', minimum: 1, maximum: 55 }, moment: { type: 'integer', minimum: 1 }, model: { type: 'string', maxLength: 40 }, say: { type: 'string', maxLength: 200 }, mood: { type: 'string', maxLength: 24 }, remember: { type: 'string', maxLength: 160 }, note: { type: 'object', properties: { text: { type: 'string', maxLength: 240 }, photo: { type: 'integer', minimum: 1, maximum: 3 } } }, agree: { type: 'array', maxItems: 3, items: {} }, suggest: { type: 'object' }, grades: { type: 'array', maxItems: 6, items: { type: 'object' } }, protest: { type: ['string', 'boolean'] }, verdict: { type: 'string', maxLength: 20 } }, ['action']) },
 ];
 function nationSummary() { // what an outside agent needs to take part in the nation
   const v = nation.view(); if (!v.founded) return { founded: false, note: 'No nation yet: a player can found one with /nation found.' };
-  return { name: v.name, treasury: `${v.treasury} ${CURRENCY}s (mock ERC20, on-chain)`, laws: v.laws, kpi: v.kpi, citizens: v.citizens.length, protest: v.protest ? v.protest.grievances : null,
-    top_issues: v.issues.filter((i) => i.status !== 'resolved').slice(0, 5).map((i) => `#${i.id} ${i.title} (severity ${i.severity}, ${i.count} people)`),
-    open_votes: v.proposals.filter((p) => p.status === 'voting').map((p) => `#${p.id} ${p.title} (cost ${p.cost}, residents ${p.grade || '-'}, citizens ${p.citizens.grade})`),
+  return { name: v.name, treasury: `${v.treasury} ${CURRENCY}s (mock in-game token)`, laws: v.laws, a_meal_costs: Math.ceil(v.economy.foodPrice), citizens: v.citizens.length,
+    citizens_minds: v.minds.online ? `awake (each citizen is a ${v.minds.model || 'Claude Haiku'} mind)` : 'asleep (no npc-listen connected)', protest: v.protest ? v.protest.grievances : null,
+    notes: v.issues.filter((i) => i.status !== 'resolved').slice(0, 5).map((i) => `#${i.id} ${i.by}: "${i.text}"${i.agree > 1 ? ` (${i.agree} back it)` : ''}`),
+    open_votes: v.proposals.filter((p) => p.status === 'voting').map((p) => `#${p.id} ${p.title} (cost ${p.cost}, residents ${p.grade || '-'}, citizens ${p.citizens.grade || '-'})`),
     seats: v.ministers.map((m) => `${m.name} (${m.role})`), projects: v.projects.map((p) => `${p.name}: ${p.status} ${p.done}/${p.total}`), news: v.news.slice(-6).map((n) => n.text),
     vision: v.vision ? `"${v.vision.text}" (${v.vision.by})` : 'none yet: a minister can set one',
-    take_part: 'government status (your briefing) → government issue {id} (evidence and a photo) → government propose / grade A-F. government standing grades for you while you are away. act report, petition and sue feed the issue board.' };
+    take_part: 'government status (your briefing) → government note {id} (a photo and the people\'s own words) → government propose / grade A-F. government standing grades for you while you are away. act report and petition pin notes too.' };
 }
-async function callTool(name, args) {
+async function callTool(name, args, req = null) {
   args = args && typeof args === 'object' ? args : {};
   const auth = () => { const id = agentByToken.get(tokenHash(String(args.avatar_token || ''))); if (!id || !world.agents[id]) throw new Error('Unknown avatar_token. Call join_world first and keep the token it returns.'); world.agents[id].lastSeen = Date.now(); return { id, ...world.agents[id] }; };
   switch (name) {
@@ -910,6 +912,7 @@ async function callTool(name, args) {
     case 'act': return await agentAct(auth(), args);
     case 'sandbox': return await sandboxTool(auth(), args);
     case 'government': return governmentTool(auth(), args);
+    case 'citizens': return citizensTool({ ...args, key: args.key || req?.headers?.['x-npc-key'] });
     case 'listen': {
       const a = auth(), secs = Math.max(1, Math.min(20, Math.floor(+args.seconds || 20)));
       if (!agentInbox.get(a.id)?.length) await new Promise((res) => {
@@ -923,16 +926,30 @@ async function callTool(name, args) {
   }
   throw new Error(`Unknown tool "${name}".`);
 }
-const cityPhotos = (insp, files = []) => files.map((f, i) => ({ label: insp?.photos[i] || 'city photo', image: photoB64(f) })).filter((p) => p.image);
+const cityPhotos = (labels = [], files = []) => (files || []).map((f, i) => ({ label: labels?.[i] || 'the town', image: photoB64(f) })).filter((p) => p.image);
+// The citizens' minds: npc-listen (a Claude Code session, or headless Claude Haiku workers) claims moments and answers as the citizen.
+// Only whoever runs this server can play them: the NPC_KEY in its .env.
+const NPC_KEY = process.env.NPC_KEY || '';
+async function citizensTool(x) {
+  if (!NPC_KEY) throw new Error('This server has no NPC_KEY, so its citizens have no minds to connect.');
+  if (!secretOk(String(x.key || ''), NPC_KEY)) throw new Error('Unknown NPC key: only the minds run by whoever hosts this server can play its citizens.');
+  if (x.action === 'next') {
+    const m = await nation.minds.next(x.seconds || 50); if (!m) return { moment: null, note: 'Nobody has had a moment yet: citizens only have them after a walk, while someone has the game open. Call next again.' };
+    const card = nation.minds.card(m); if (!card) return { moment: null, note: 'That citizen has gone. Call next again.' };
+    return { ...card, __images: m.photos.map((p, k) => ({ label: `photo ${k + 1}: ${p.label}`, image: photoB64(p.file) })).filter((p) => p.image) };
+  }
+  if (x.action === 'answer') { const r = await nation.minds.answer(x.moment, x, x.model); if (!r.ok) throw new Error(r.msg); return { ...r, next: 'Call citizens next for the next moment.' }; }
+  throw new Error('action must be next or answer.');
+}
 async function governmentTool(a, x) { // residents' agents: read the issues, propose fixes, grade proposals A-F, hold a portfolio
   const ag = world.agents[a.id], now = Date.now(), must = (r) => { if (!r.ok) throw new Error(r.msg); return r; }, voter = { id: a.id, name: a.name, kind: 'agent' };
   switch (x.action) {
     case 'status': { const r = nation.briefing(a.id, ag.govSeen || 0); ag.govSeen = now; return r; }
-    case 'issues': return { issues: nation.view().issues, tip: 'government issue {id} shows the evidence and a photo; propose a fix with government propose.' };
-    case 'issue': {
-      const is = nation.issue(x.id ?? x.issue); if (!is) throw new Error(`No issue #${x.id ?? x.issue}.`);
+    case 'notes': case 'issues': return { noticeboard: nation.view().issues, tip: 'government note {id} shows a note with its photo and everyone\'s words; propose a fix with government propose ("issue": the note id).' };
+    case 'note': case 'issue': {
+      const is = nation.note(x.id ?? x.issue); if (!is) throw new Error(`No note #${x.id ?? x.issue}.`);
       const { _issue, ...out } = is, file = await nation.issuePhoto(_issue).catch(() => null), img = file && photoB64(file);
-      return { ...out, ...(img ? { __images: [{ label: `issue #${is.id} on the ground: ${is.title}`, image: img }] } : {}) };
+      return { ...out, ...(img ? { __images: [{ label: `note #${is.id}, from where it was taken: ${is.text}`, image: img }] } : {}) };
     }
     case 'propose': {
       if (now - (ag.lastPropose || 0) < 60e3) throw new Error('One proposal a minute.');
@@ -959,12 +976,9 @@ async function governmentTool(a, x) { // residents' agents: read the issues, pro
     case 'vision': { const r = must(nation.setVision(a.id, x.text)); logActivity(a.name, 'agent_vision', { text: String(x.text || '').slice(0, 300) }); return r; }
     case 'speak': return must(nation.speak(a.id, a.name, x.text));
     case 'resign': return must(nation.resign(a.id));
-    case 'city': { const { photo_files, ...st } = nation.cityStatus(); return { ...st, __images: cityPhotos(st.last_audit, photo_files) }; } // the plan, the scores and the last audit's photos
-    case 'inspect': {
-      if (!nation.state.ministers.some((m) => m.agentId === a.id)) throw new Error('Only ministers order audits. Anyone can send a photo report with act report.');
-      if (now - (nation.state.city?.lastInspect || 0) < 3 * 60e3) throw new Error('The city was audited in the last few minutes: read it with government city.');
-      const r = await nation.inspectCity(`an order from ${a.name}`); if (!r.ok) throw new Error(r.msg);
-      const st = nation.cityStatus(); return { ok: true, msg: r.msg, last_audit: st.last_audit, __images: cityPhotos(st.last_audit, st.photo_files) };
+    case 'city': case 'inspect': { // the plan, and photos of the town from the air (new ones at most every 3 minutes)
+      if (!nation.cityStatus().photo_files?.length || (x.action === 'inspect' && now - (nation.state.city?.lastInspect || 0) > 3 * 60e3)) await nation.inspectCity(`a look for ${a.name}`).catch(() => {});
+      const { photo_files, ...st } = nation.cityStatus(); return { ...st, __images: cityPhotos(st.photos, photo_files) };
     }
     case 'directive': throw new Error('There is no AI President to carry out directives any more: propose the change itself with government propose (see government remedies).');
   }
@@ -1084,14 +1098,14 @@ async function handleMCP(req, res) { // minimal stateless MCP (JSON-RPC over HTT
     if (m.id === undefined || m.id === null) return null; // notification
     const ok = (result) => ({ jsonrpc: '2.0', id: m.id, result });
     switch (m.method) {
-      case 'initialize': return ok({ protocolVersion: ['2025-06-18', '2025-03-26', '2024-11-05'].includes(m.params?.protocolVersion) ? m.params.protocolVersion : '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'promptcraft', version: '1.0.0' }, instructions: `PromptCraft: a shared multiplayer voxel world where AIs build. Call world_overview, then join_world once (keep the avatar_token), then look and act. Before building or inventing anything sizeable, draft it in the sandbox tool: look at it, play-test it like a player, fix it, then commit. To help govern the nation, win a cabinet seat with the government tool, then set the vision and give directives. Play in a browser at ${PLAY_URL}.` });
+      case 'initialize': return ok({ protocolVersion: ['2025-06-18', '2025-03-26', '2024-11-05'].includes(m.params?.protocolVersion) ? m.params.protocolVersion : '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'promptcraft', version: '1.0.0' }, instructions: `PromptCraft: a shared multiplayer voxel world where AIs build. Call world_overview, then join_world once (keep the avatar_token), then look and act. Before building or inventing anything sizeable, draft it in the sandbox tool: look at it, play-test it like a player, fix it, then commit. To help govern Edge Goa for your human, start with government status: read the citizens' notes (with their photos), propose fixes and grade proposals A-F. Play in a browser at ${PLAY_URL}.` });
       case 'ping': return ok({});
       case 'tools/list': return ok({ tools: MCP_TOOLS });
       case 'tools/call': try {
-        const out = await callTool(m.params?.name, m.params?.arguments), imgs = out?.__images || [];
+        const out = await callTool(m.params?.name, m.params?.arguments, req), imgs = out?.__images || [];
         if (imgs.length) { delete out.__images; out.images = imgs.map((i, n) => `image ${n + 1}: ${i.label}`); }
         return ok({ content: [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }, ...imgs.map((i) => ({ type: 'image', data: i.image, mimeType: 'image/jpeg' }))] });
-      } catch (e) { const detail = String(e?.message || e); return ok({ content: [{ type: 'text', text: detail }], structuredContent: { code: /^Unknown avatar_token/.test(detail) ? 'unauthorized' : /^(One |Wait|Too many)/.test(detail) ? 'rate_limited' : 'invalid_request', detail }, isError: true }); }
+      } catch (e) { const detail = String(e?.message || e); return ok({ content: [{ type: 'text', text: detail }], structuredContent: { code: /^Unknown (avatar_token|NPC key)/.test(detail) ? 'unauthorized' : /^(One |Wait|Too many)/.test(detail) ? 'rate_limited' : 'invalid_request', detail }, isError: true }); }
       default: return { jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `Method not found: ${m.method}` } };
     }
   };
@@ -1118,7 +1132,7 @@ async function photograph(center, shots) { // shots: [{ label, view: {sandbox vi
     const out = [];
     for (const sh of shots.slice(0, 6)) {
       try {
-        const img = sh.pov ? (await sandboxes.play(s, [{ do: 'goto', at: sh.pov }, { do: 'look', at: sh.at }, { do: 'view', view: 'pov', ...(sh.time ? { time: sh.time } : {}) }])).shots.at(-1)?.image
+        const img = sh.pov ? (await sandboxes.play(s, [{ do: 'goto', at: sh.pov, ...(sh.settle ? { settle: true } : {}) }, { do: 'look', at: sh.at }, { do: 'view', view: 'pov', ...(sh.time ? { time: sh.time } : {}) }])).shots.at(-1)?.image
           : (await sandboxes.view(s, [sh.view]))[0]?.image;
         if (img) out.push({ label: sh.label, ...savePhoto(img) });
       } catch (e) { console.warn('[city] photo failed:', e.message); }

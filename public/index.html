@@ -40,7 +40,7 @@ canvas{display:block}
 #chat div.fade{opacity:0}#chat div.old{display:none}
 #chat.open{overflow-y:auto;pointer-events:auto;user-select:text}
 #chat.open div{opacity:1;display:block}
-#chat .ai{color:var(--green)}#chat .agent{color:var(--aqua)}#chat .sys{color:var(--yellow)}#chat .err{color:var(--red)}#chat .me{color:#fff}
+#chat .ai{color:var(--green)}#chat .agent{color:var(--aqua)}#chat .npc{color:#ffc58a}#chat .sys{color:var(--yellow)}#chat .err{color:var(--red)}#chat .me{color:#fff}
 #chat .mention{background:rgba(255,255,85,.22)}
 #toasts{position:absolute;top:10px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:4px}
 #toasts div{background:#212121;border:2px solid #555;outline:2px solid #000;padding:7px 14px;font-size:16px}
@@ -155,6 +155,7 @@ input[type=range]::-moz-range-thumb{width:10px;height:20px;background:#8b8b8b;bo
 .citywrap{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}#citymap{max-width:100%;border:1px solid #555}.citylegend{flex:1;min-width:160px;font-size:13px}.citylegend span{display:inline-block;margin:0 8px 3px 0}.citylegend i{display:inline-block;width:10px;height:10px;margin-right:4px;vertical-align:middle}
 .cityphotos{display:flex;gap:6px;flex-wrap:wrap}.cityphotos figure{margin:0;width:calc(50% - 3px)}.cityphotos img{width:100%;display:block;border-radius:4px}.cityphotos figcaption{font-size:12px;opacity:.8}
 .nnews{max-height:180px;overflow:auto;font-size:14px;background:rgba(0,0,0,.25);padding:6px}.nnews div{margin:2px 0}.nwarn{color:#ffb38a}
+.npol{background:#fbf8ef;padding:7px 7px 4px;text-decoration:none;border-radius:2px;box-shadow:0 3px 10px rgba(0,0,0,.45);float:right;width:40%;max-width:250px;margin:2px 2px 8px 12px;transform:rotate(var(--r,2deg))}.npol img{width:100%;display:block}.npol small{display:block;text-align:center;font-family:'Pixelify Sans',monospace;color:#555;margin-top:3px}
 .ncard{background:rgba(0,0,0,.22);border-radius:6px;padding:8px 10px;margin:0 0 8px}.ncard p{margin:5px 0}.nphoto{float:right;width:38%;max-width:240px;margin:0 0 6px 8px;border-radius:4px}
 .ngrade{min-width:30px;font-weight:bold;border-bottom:3px solid var(--g)}.ngrade.on{background:var(--g);color:#111}
 @media (max-width:640px){.ngrid{grid-template-columns:repeat(2,1fr)}}
@@ -2359,7 +2360,7 @@ const KEY_ACTIONS = [
   ['forward', 'Walk Forward', 'KeyW'], ['back', 'Walk Backward', 'KeyS'], ['left', 'Strafe Left', 'KeyA'], ['right', 'Strafe Right', 'KeyD'],
   ['jump', 'Jump · Fly Up', 'Space'], ['sprint', 'Sprint · Fly Down', 'ShiftLeft'], ['fly', 'Fly (creative)', 'KeyF'],
   ['inventory', 'Inventory', 'KeyE'], ['drop', 'Drop Item', 'KeyQ'], ['chat', 'Open Chat', 'KeyT'], ['command', 'Open Command', 'Slash'],
-  ['create', 'Ask @Creator', 'KeyG'], ['players', 'List Players', 'Tab'], ['regionYes', 'Generate Region', 'KeyY'], ['regionNo', 'Skip Region', 'KeyN'], ['minds', 'AI Minds On / Off', 'KeyK'], ['nation', 'Nation (citizens, cabinet, court)', 'KeyJ'], ['howto', 'How to Play', 'KeyH'], ['library', 'Library (games, items, interfaces)', 'KeyL'],
+  ['create', 'Ask @Creator', 'KeyG'], ['players', 'List Players', 'Tab'], ['regionYes', 'Generate Region', 'KeyY'], ['regionNo', 'Skip Region', 'KeyN'], ['minds', 'AI Minds On / Off', 'KeyK'], ['nation', 'Edge Goa (noticeboard, votes, people)', 'KeyJ'], ['howto', 'How to Play', 'KeyH'], ['library', 'Library (games, items, interfaces)', 'KeyL'],
 ];
 const KB = {};
 { let saved = {}; try { saved = JSON.parse(localStorage.getItem('pc.keys') || '{}'); } catch {} for (const [k, , d] of KEY_ACTIONS) KB[k] = saved[k] || d; }
@@ -3457,8 +3458,8 @@ function closePrompt(relock = true) { $('#promptbar').style.display = 'none'; $(
 const CMDS = {
   help: '', tutorial: '', hints: 'on|off', gamemode: 'survival|creative', give: '<item> [count]', spawn: '<creature> [count]', tp: '<x> <y> <z> | spawn', kill: '(respawn)', suicide: '(respawn)', time: 'day|night|sunset|storm', fly: '', undo: '', killall: '(monsters + wildlife)',
   ai: '<prompt>', region: '[theme]', regions: '', warp: '<region>', minds: 'on|off', agents: 'on|off', gov: '', propose: '<law> <value>', vote: '<id> yes|no', bank: '', grant: '<name> <amount>',
-  nation: '[found|on|off] (on/off: the civil service)', telegram: '(link Telegram for pings about votes and issues)', issues: '(what the city noticed, and open votes)', grade: '<proposal> <A-F>', fix: '<issue> (propose the suggested fix)', delegate: 'on|off (your AI agent votes for you)',
-  petition: '<what the government should do>', report: '<what you see and what should change> (sends a photo of your view)', sue: '<name|government> <claim>',
+  nation: '[found] (open the Edge Goa panel)', telegram: '(link Telegram: a ping when a big call needs you)', issues: '(the town noticeboard and open votes)', notes: '(the town noticeboard and open votes)', grade: '<proposal> <A-F>', fix: '<note> (propose the fix it suggests)', delegate: 'on|off (your AI agent votes for you)',
+  petition: '<what you want done>', report: '<what you see> (pins a photo of your view to the noticeboard)', sue: '<name|government> <claim>',
   pay: '<name> <amount> [memo]', bal: '', who: '', rd: '<2-16>', def: '<key>', name: '<new name>', new: '', game: '<game> | stop (start a game from the library)', library: '(everything made in this world)',
 };
 const sug = { list: [], i: 0, start: 0, token: '', usage: '', cycle: null }, chatHist = [];
@@ -3566,7 +3567,7 @@ function command(v) {
   track('cmd', normKey(cmd));
   const p = player.pos;
   switch (cmd) {
-    case 'region': case 'regions': case 'warp': case 'minds': case 'gov': case 'propose': case 'vote': case 'bank': case 'grant': case 'nation': case 'petition': case 'report': case 'sue': case 'issues': case 'grade': case 'fix': case 'delegate': case 'telegram': regionCommand(cmd, a); break;
+    case 'region': case 'regions': case 'warp': case 'minds': case 'gov': case 'propose': case 'vote': case 'bank': case 'grant': case 'nation': case 'petition': case 'report': case 'sue': case 'issues': case 'notes': case 'grade': case 'fix': case 'delegate': case 'telegram': regionCommand(cmd, a); break;
     case 'help': chatLine('Chat goes to everyone · <b>@Creator</b> makes things · <b>@Name</b> talks to an AI or pings a player · Tab completes. Commands: ' + Object.entries(CMDS).map(([c, u]) => esc(`/${c}${u ? ' ' + u : ''}`)).join(' · '), 'sys'); break;
     case 'ai': askAI(a.join(' ')); break;
     case 'library': openLibrary(); break;
@@ -3806,8 +3807,8 @@ function hostIntent(m) { // another player asked the host to do something
     case 'cmd': if (m.cmd === 'undo') undoLast(); else if (m.cmd === 'killall') clearMobs(); break;
   }
 }
-const chatCls = (l) => (l.kind === 'ai' ? 'ai' : l.kind === 'agent' ? 'agent' : 'me');
-const chatHTML = (l) => (l.kind === 'agent' ? `🤖 <b>${esc(l.name)}:</b> ${esc(l.text)}` : l.kind === 'prompt' ? `<b>${esc(l.name)} → ✨</b> ${esc(l.text)}` : l.kind === 'ai' ? `✨ <i>(for ${esc(l.name)})</i> ${esc(l.text)}` : `<b>${esc(l.name)}:</b> ${esc(l.text)}`);
+const chatCls = (l) => (l.kind === 'ai' ? 'ai' : l.kind === 'agent' ? 'agent' : l.kind === 'npc' ? 'npc' : 'me');
+const chatHTML = (l) => (l.kind === 'agent' ? `🤖 <b>${esc(l.name)}:</b> ${esc(l.text)}` : l.kind === 'npc' ? `🏘 <b>${esc(l.name)}:</b> ${esc(l.text)}` : l.kind === 'prompt' ? `<b>${esc(l.name)} → ✨</b> ${esc(l.text)}` : l.kind === 'ai' ? `✨ <i>(for ${esc(l.name)})</i> ${esc(l.text)}` : `<b>${esc(l.name)}:</b> ${esc(l.text)}`);
 function onNet(m) {
   try {
     switch (m.t) {
@@ -3843,6 +3844,8 @@ function onNet(m) {
       case 'gov': net.gov = m.gov; break;
       case 'nation': net.nation = m.n; hallViz.dirty = true; if (uiMode === 'nation') renderNation(); break;
       case 'cabinet': onCabinet(m); break;
+      case 'citsay': { const e = natEntity(m.cit, m.name); if (e) { speak(e, m.text, 8, true, true); if (isHost()) { speechLog.push({ name: e.name, text: String(m.text).slice(0, 220), pos: P3(e.pos), t: Date.now() }); if (speechLog.length > 60) speechLog.shift(); } } break; }
+      case 'snap': { const e = natEntity(m.cit); if (e) { emojiBurst(e.eye(), '📸', 1, 0.8); burst(e.eye(), '#ffffff', 14, 3, 0.1, 0.35, 0); } break; }
       case 'agentgone': for (const e of [...entities]) if (e.vars?._agent === m.id && !e.dead) removeEntity(e); break;
       case 'holo': setHolo(m.holo); break;
       case 'region': setRegion(m.rk, m.r, false); if (m.r?.status === 'ready') toast(`🌍 New region: ${m.r.name}${m.r.by ? ` (by ${m.r.by})` : ''}`); else if (m.r?.status === 'pending') sysMsg(`🛰 ${m.r.by} is generating region ${m.r.name}…`); break;
@@ -3913,7 +3916,7 @@ function viewContext(e) { // Creator context for an agent's "create" request, se
 }
 function hostAgentOp(m) {
   const reply = (ok, msg, data) => netSend({ t: 'agentres', rid: m.rid, ok, msg, data });
-  if (['found', 'project', 'projectStatus', 'hall', 'survey', 'streets', 'routes', 'pathBlocks', 'lamps'].includes(m.op)) { try { return hostNationOp(m, reply); } catch (err) { return reply(false, String(err?.message || err)); } }
+  if (['found', 'project', 'projectStatus', 'hall', 'survey', 'streets', 'routes', 'pathBlocks', 'lamps', 'visit'].includes(m.op)) { try { return hostNationOp(m, reply); } catch (err) { return reply(false, String(err?.message || err)); } }
   try {
     const e = agentAvatar(m.agent || {}); if (!e) return reply(false, 'Could not place your avatar (the world is full of creatures).');
     switch (m.op) {
@@ -4120,11 +4123,11 @@ function regionCommand(cmd, a) {
       break;
     }
     case 'nation': if (!a[0]) { openNation(); break; } if (!net.online) { sysMsg('The nation lives on the multiplayer server.', 'err'); break; } ledgerReq({ t: 'natcmd', cmd: a[0] === 'on' || a[0] === 'off' ? 'autonomy' : a[0], args: a.slice(a[0] === 'on' || a[0] === 'off' ? 0 : 1) }).then((r) => sysMsg((r.ok ? '🏛 ' : '✖ ') + (r.msg || ''), r.ok ? 'sys' : 'err')); break;
-    case 'report': if (!a.length) { sysMsg('Usage: /report <what you see and what should change>: the cabinet gets a photo of your view with it.', 'err'); break; } sendReport(a.join(' ')); break;
+    case 'report': if (!a.length) { sysMsg('Usage: /report <what you see>: pins it to the town noticeboard with a photo of your view.', 'err'); break; } sendReport(a.join(' ')); break;
     case 'petition': case 'sue': if (!net.online) { sysMsg('The nation lives on the multiplayer server.', 'err'); break; } ledgerReq({ t: 'natcmd', cmd: cmd, args: a }).then((r) => sysMsg((r.ok ? '🏛 ' : '✖ ') + (r.msg || ''), r.ok ? 'sys' : 'err')); break;
-    case 'issues': natIssuesChat(); break;
-    case 'grade': { const id = String(a[0] || '').replace('#', ''), g = String(a[1] || '').toUpperCase(); if (!id || !GRADES.includes(g)) { sysMsg('Usage: /grade <proposal> <A-F> (A excellent · B very good · C good · D acceptable · E poor · F reject). See /issues.', 'err'); break; } natCmd('grade', [id, g]); break; }
-    case 'fix': { const id = String(a[0] || '').replace('#', ''); if (!id) { sysMsg('Usage: /fix <issue>: proposes the fix the city suggests (see /issues).', 'err'); break; } natCmd('fix', [id]); break; }
+    case 'issues': case 'notes': natIssuesChat(); break;
+    case 'grade': { const id = String(a[0] || '').replace('#', ''), g = String(a[1] || '').toUpperCase(); if (!id || !GRADES.includes(g)) { sysMsg('Usage: /grade <proposal> <A-F> (A excellent · B very good · C good · D acceptable · E poor · F reject). See /notes.', 'err'); break; } natCmd('grade', [id, g]); break; }
+    case 'fix': { const id = String(a[0] || '').replace('#', ''); if (!id) { sysMsg('Usage: /fix <note>: proposes the fix a noticeboard note suggests (see /notes).', 'err'); break; } natCmd('fix', [id]); break; }
     case 'delegate': natCmd('delegate', [a[0] === 'off' ? 'off' : 'on']); break;
     case 'telegram': if (!net.online) { sysMsg('Telegram links live on the multiplayer server.', 'err'); break; } ledgerReq({ t: 'natcmd', cmd: 'telegram', args: [] }).then((r) => chatLine((r.ok ? '📨 ' : '✖ ') + esc(r.msg || '').replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank">$1</a>'), r.ok ? 'sys' : 'err')); break;
     case 'grant': ledgerReq({ t: 'grant', to: a[0], amount: +a[1], memo: a.slice(2).join(' ') }).then((r) => sysMsg((r.ok ? '🏛 ' : '✖ ') + (r.msg || ''), r.ok ? 'sys' : 'err')); break;
@@ -4267,9 +4270,7 @@ const BUILTIN_ENTITIES = [
 ];
 BUILTIN_ENTITIES.push({ key: 'visitor', name: 'Agent', description: 'avatar of an outside AI agent playing through the MCP API', model: { template: 'humanoid', colors: { primary: '#4fa3ff', secondary: '#2b2b3a', accent: '#f1c7a0' }, parts: [{ emoji: '🤖', size: [0.35, 0.35, 0.35], at: [0, 2.3, 0], anim: 'float' }] }, hp: 30, speed: 3.8, team: 'player', tags: ['agent_avatar'], brain: { move: 'idle' } });
 BUILTIN_ENTITIES.push(
-  { key: 'citizen', name: 'Citizen', description: 'a citizen of the nation: their own personality, job, needs, moods and an on-chain wallet', model: { template: 'humanoid', colors: { primary: '#4f8fd6', secondary: '#3a3a52', accent: '#e8b98f' } }, hp: 30, speed: 3.2, team: 'player', tags: ['citizen'], brain: { move: 'wander' } },
-  { key: 'minister', name: 'Minister', description: 'a member of the AI cabinet', model: { template: 'humanoid', colors: { primary: '#24304a', secondary: '#15151f', accent: '#e8b98f' }, parts: [{ size: [0.12, 0.4, 0.05], at: [0, 1.15, 0.15], color: '#b3261e' }] }, hp: 40, speed: 2.6, team: 'player', tags: ['citizen', 'minister'], brain: { move: 'wander' } },
-  { key: 'judge', name: 'Judge', description: 'the judge of the nation\'s court', model: { template: 'humanoid', colors: { primary: '#141414', secondary: '#141414', accent: '#e8b98f' }, parts: [{ size: [0.56, 0.22, 0.56], at: [0, 2.02, 0], color: '#eeeeee' }] }, hp: 40, speed: 2.2, team: 'player', tags: ['citizen', 'judge'], brain: { move: 'wander' } },
+  { key: 'citizen', name: 'Citizen', description: 'a citizen of Edge Goa: a job, a home, a daily routine, opinions of their own and an on-chain wallet', model: { template: 'humanoid', colors: { primary: '#4f8fd6', secondary: '#3a3a52', accent: '#e8b98f' } }, hp: 30, speed: 3.2, team: 'player', tags: ['citizen'], brain: { move: 'wander' } },
   { key: 'item_drop', description: 'a dropped item lying on the ground', model: { template: 'none' }, hp: 1e6, speed: 0, team: 'neutral', size: [0.35, 0.35], brain: { move: 'idle' } },
   { key: 'skeleton', model: { template: 'humanoid', colors: { primary: '#d6d6d6', secondary: '#bdbdbd', accent: '#e6e6e6', eyes: '#202020' } }, hp: 20, speed: 2.6, team: 'monster', tags: ['undead'],
     brain: { move: 'chase', targets: 'tag=player', range: 18, keepDistance: 8 }, melee: { damage: 2 }, drops: [{ item: 'bone', count: [0, 2] }],
@@ -4574,17 +4575,19 @@ function sbState() {
     recent_messages: SB.chat.slice(-15), running_scripts: running.length };
 }
 // ---------------------------------------------------------------- 14. the nation (server: nation.js)
-// The server simulates Edge Goa's economy, cabinet and court. The host browser makes it visible: citizens live
-// around the capital, walk to public projects and build them block by block (the server pays them on-chain per
-// block), go on strike or march on the town hall when they're fed up, and ministers speak during cabinet meetings.
+// The server runs Edge Goa's economy and votes; each citizen's mind (a Claude Haiku, via npc-listen) decides what they
+// say and think. The host browser makes it visible: citizens live around the capital, walk their day, build public
+// projects block by block (the server pays them on-chain per block), and speak up or strike when they're fed up.
 const pickOne = (l) => l[Math.floor(Math.random() * l.length)];
 const NAT = { people: new Map(), projects: new Map(), lastCtl: 0, prog: new Map(), progT: 0, trips: new Map() };
+const natEntity = (cit, name) => entities.find((x) => x.vars?._cit === cit && !x.dead) || (name ? entities.find((x) => x.name === name && x.def?.key === 'citizen' && !x.dead) : null);
+const moodEmoji = (w) => { const s = String(w || '').toLowerCase(); return !s ? null : /furious|livid|angry|fed up|outraged|mad\b/.test(s) ? '😠' : /annoy|grump|frustrat|worried|anxious|sad|upset|irritat|tired|exhaust|hungry|disappoint|fed|sore|wet/.test(s) ? '😕' : /happy|cheer|glad|great|delight|content|pleased|proud|hopeful|relax|joy|grateful|good|excited/.test(s) ? '😊' : null; };
 const natPeople = () => { const n = net.nation; return n?.founded ? (n.citizens || []).map((c) => ({ ...c, kind: 'citizen' })) : []; }; // elected agent ministers are their own avatars
 function natPersona(p) {
   const n = net.nation;
   return `${p.name}, ${p.age}, a ${p.occupation} living in ${n.name}. ${p.personality || ''} You want: ${(p.wants || []).join('; ') || 'a good life'}. You are a free person with your own opinions, not a servant: talk like a real neighbour, complain about what bothers you, praise what's good, and say it if you're on strike or protesting and why.`;
 }
-function natSpawn(p) { // the host materialises a citizen, minister or judge as a creature with its own mind
+function natSpawn(p) { // the host materialises a citizen as a creature
   const home = p.home || net.nation.capital; if (!home) return null;
   ensureArea(home.x, home.z);
   const y = surfaceY(Math.floor(home.x), Math.floor(home.z)) + 1.05;
@@ -4603,7 +4606,8 @@ function nationControl(t) { // host, ~3x a second
     let e = byId.get(p.id);
     if (!e) { if (nowS() - (NAT.people.get(p.id)?.spawnT || -99) < 10) continue; NAT.people.set(p.id, { spawnT: nowS() }); e = natSpawn(p); if (!e) continue; }
     const st = NAT.people.get(p.id) || {}; NAT.people.set(p.id, st);
-    if (p.kind === 'citizen') e.vars._state = `you are ${p.status}${p.job ? ` (job: project #${p.job})` : ''}, mood ${Math.round(p.mood * 100)}%, trust in the government ${Math.round(p.trust * 100)}%, ${p.coins} ${net.currency}s in your wallet${p.grievances?.length ? `; what bothers you: ${p.grievances.join('; ')}` : ''}`;
+    if (p.kind === 'citizen') e.vars._state = `you are ${p.status}${p.job ? ` (job: project #${p.job})` : ''}${p.mood ? `, feeling ${p.mood}` : ''}, ${p.coins} ${net.currency}s in your wallet`;
+    if (st.visit && natVisit(p, e, st, t)) continue; // asked to go and see a place again
     if (hallRoutine(p, e, st, t)) continue;
     const capital = n.capital;
     if (p.status === 'protesting' && capital) { // march on the Hall of Government, chant, wave signs
@@ -4613,10 +4617,10 @@ function nationControl(t) { // host, ~3x a second
       if (t > (st.chant || 0)) { st.chant = t + 7 + Math.random() * 8; const sl = n.protest?.slogans || ['✊ ENOUGH!']; speak(e, pickOne(sl), 5, true); emojiBurst(e.eye(), pickOne(['✊', '📢', '😡', '🪧']), 2, 1.2); }
     } else if (p.status === 'striking') {
       st.spot = null; e.moveGoal = null; e.goal = null; st.stepKey = st.leg = null;
-      if (t > (st.chant || 0)) { st.chant = t + 12 + Math.random() * 10; emojiBurst(e.eye(), '😠', 1, 1); if (Math.random() < 0.4) speak(e, pickOne(['Not lifting another block until we get paid.', 'On strike!', 'Pay us first.', ...(p.grievances || []).map((g) => g.split(':')[0] + '!')]), 4, true); }
+      if (t > (st.chant || 0)) { st.chant = t + 12 + Math.random() * 10; emojiBurst(e.eye(), '😠', 1, 1); if (Math.random() < 0.4) speak(e, pickOne(['Not lifting another block until this is sorted.', 'On strike!', 'Fix it first.']), 4, true); }
     } else if (p.status !== 'working' || !NAT.projects.get(p.job)) { st.spot = null; e.heldKey = ''; natRoutine(p, e, st, t); }
     else natCommute(p, e, st, NAT.projects.get(p.job), t);
-    if (p.kind === 'citizen' && t > (st.moodT || 0)) { st.moodT = t + 20 + Math.random() * 20; const em = p.mood > 0.7 ? '😊' : p.mood > 0.45 ? null : p.mood > 0.3 ? '😕' : '😠'; if (em) emojiBurst(e.eye(), em, 1, 0.8); }
+    if (p.kind === 'citizen' && t > (st.moodT || 0)) { st.moodT = t + 20 + Math.random() * 20; const em = moodEmoji(p.mood); if (em) emojiBurst(e.eye(), em, 1, 0.8); }
   }
   for (const m of n.ministers.filter((x) => x.agent)) { // elected agents' avatars take their seats for meetings too
     const e = entities.find((x) => x.vars?._agent === m.id && !x.dead); if (!e) continue;
@@ -4660,7 +4664,7 @@ function workProjects(t, byId) { // citizens build public projects one block at 
 }
 function count(P, cid) { const by = NAT.prog.get(P.id) || {}; by[cid] = (by[cid] || 0) + 1; NAT.prog.set(P.id, by); }
 // ---- city navigation (host): a walkable grid over the capital (one cell per block column) and A* on it. Citizens walk
-// these routes and report what each walk was like (trip legs); the server asks for routes, footpaths and lamps.
+// these routes; the server asks for footpaths and lamps along them.
 const NAV = { g: null, t: 0, stuck: [] }, PAVED_RE = /cobble|brick|plank|gravel|quartz|slab|concrete|tile|path/;
 const NAV_N8 = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.41], [1, -1, 1.41], [-1, 1, 1.41], [-1, -1, 1.41]];
 function navBox(pts = []) { // [x0, z0, x1, z1]: the open rings of the city plan (or around the capital) and any extra points, at most 400×400
@@ -4735,7 +4739,7 @@ function navSight(G, a, b) { // can someone ~0.6 wide walk straight from cell a 
 function navStats(G, path) { // what walking it is like: metres, climbing, swimming, unlit and unpaved cells, unfinished sites passed, ≤ 24 points
   const { W, f, h, eye } = G, eyes = new Set(); let len = 0, climb = 0, swim = 0, dark = 0, unpaved = 0;
   path.forEach((i, k) => { if (k) { const p = path[k - 1]; len += (i % W) !== (p % W) && ((i / W) | 0) !== ((p / W) | 0) ? 1.41 : 1; climb += Math.max(0, h[i] - h[p]); } if (f[i] & 1) swim++; else if (!(f[i] & 2)) unpaved++; if (!(f[i] & 4)) dark++; if (eye[i]) eyes.add(eye[i]); });
-  const every = Math.max(1, Math.ceil(path.length / 24)), pts = path.filter((_, k) => k % every === 0 || k === path.length - 1).map((i) => [G.x0 + (i % W), G.z0 + ((i / W) | 0)]);
+  const every = Math.max(1, Math.ceil(path.length / 24)), pts = path.filter((_, k) => k % every === 0 || k === path.length - 1).map((i) => [G.x0 + (i % W), G.z0 + ((i / W) | 0), h[i]]); // [x, z, feet height]
   return { len: Math.round(len * 10) / 10, climb, swim, dark, unpaved, eyesores: [...eyes], path: pts };
 }
 function navRoute(G, a, b) { // the walking route between two points, for the server's issue finder
@@ -4773,8 +4777,9 @@ function navLamps(G, path, onPath, put, ys = null) { // lamp posts beside a rout
     }
   });
 }
-// ---- citizens' days (host): each occupation's routine (n.behaviors, written and rewritten by the government) takes people
-// between places; they walk the A* route and every walk is reported to the server as a trip leg: the city's lived experience.
+// ---- citizens' days (host): each occupation's routine (n.behaviors, written and rewritten by the residents) takes people
+// between places along the A* route. Now and then the server shows a citizen's mind what they saw on the way (photos from
+// their own eyes) and asks what they make of it: a grumble, a note on the noticeboard, an idea for a fix.
 const ROUTINE = [{ at: 6, go: 'work', do: 'work' }, { at: 12, go: 'market', do: 'eat' }, { at: 13, go: 'work', do: 'work' }, { at: 17, go: 'park', do: 'relax' }, { at: 20, go: 'home', do: 'sleep' }];
 const OCC_PLACE = { cook: 'market', merchant: 'market', teacher: 'civic', doctor: 'civic', guard: 'hall', fisher: 'works', farmer: 'wander', artist: 'park' };
 const DO_FX = { eat: '🍲', sell: '🧺', shop: '🛍', relax: '😌', socialize: '💬', work: '🔨', sleep: '💤' };
@@ -4820,7 +4825,7 @@ function natLeg(p, e, st, q, dest, act, t) { // plan the walk to q along the A* 
   if (path) for (let a = 0; a < path.length - 1;) { let b = a + 1; for (let c = Math.min(path.length - 1, a + 8); c > a + 1; c--) if (navSight(G, path[a], path[c])) { b = c; break; } pts.push(cellPt(path[b])); a = b; } // waypoints in straight sight of each other
   else pts.push({ x: q.x + 0.5, y: surfaceY(Math.floor(q.x), Math.floor(q.z)) + 1, z: q.z + 0.5 });
   st.leg = { from, to: { x: q.x, z: q.z }, dest, do: act, pts, i: 0, t0: t, best: Infinity, bestT: t, dT: 0, stuck: 0, danger: 0, night: isNight(), straight,
-    stats: path ? navStats(G, path) : { len: Math.round(straight * 10) / 10, climb: 0, swim: 0, dark: 0, unpaved: 0, eyesores: [], path: [[Math.round(from.x), Math.round(from.z)], [Math.round(q.x), Math.round(q.z)]] }, blocked: !path };
+    stats: path ? navStats(G, path) : { len: Math.round(straight * 10) / 10, climb: 0, swim: 0, dark: 0, unpaved: 0, eyesores: [], path: [[Math.round(from.x), Math.round(from.z), from.y], [Math.round(q.x), Math.round(q.z), surfaceY(Math.floor(q.x), Math.floor(q.z)) + 1]] }, blocked: !path };
 }
 function natWalk(p, e, st, t) { // follow the waypoints; stuck for 6 s = hop to the next one (and count it)
   const L = st.leg, w = L.pts[L.i];
@@ -4832,16 +4837,30 @@ function natWalk(p, e, st, t) { // follow the waypoints; stuck for 6 s = hop to 
   if (blockDef(e.pos.x, e.pos.y + 0.1, e.pos.z).liquid && w.y > e.pos.y - 0.3) e.vel.y = Math.max(e.vel.y, 3); // swim up and out
   if (t > L.dT) { L.dT = t + 2; if (entities.some((m) => m.team === 'monster' && !m.dead && dist3(m.pos, e.pos) < 10)) L.danger++; }
 }
-function natArrive(p, e, st, t) { // the walk is over: report it (at most one a citizen per in-game hour)
+function natArrive(p, e, st, t) { // the walk is over: tell the server where they went (at most once a citizen per in-game hour, unless it was a visit)
   const L = st.leg; L.done = true; e.moveGoal = null; const w = L.pts[L.pts.length - 1]; if (w) e.home = { ...w };
-  if (L.straight < 4 || t - (st.tripT ?? -1e9) < DAY_LEN / 24) return;
+  if (L.quiet || (!L.visit && (L.straight < 4 || t - (st.tripT ?? -1e9) < DAY_LEN / 24))) return;
   st.tripT = t;
-  const end = L.pts[L.pts.length - 1], trip = { t: 'trip', cit: p.id, dest: L.dest, do: L.do, from: { x: Math.round(L.from.x), y: L.from.y, z: Math.round(L.from.z) }, to: { x: Math.round(L.to.x), y: Math.round(end?.y ?? e.pos.y), z: Math.round(L.to.z) }, straight: Math.round(L.straight * 10) / 10, ...L.stats, danger: L.danger, secs: Math.round(t - L.t0), stuck: L.stuck, night: L.night, ...(L.blocked ? { blocked: true } : {}) };
+  const end = L.pts[L.pts.length - 1], trip = { t: 'trip', cit: p.id, dest: L.dest, do: L.do, from: { x: Math.round(L.from.x), y: L.from.y, z: Math.round(L.from.z) }, to: { x: Math.round(L.to.x), y: Math.round(end?.y ?? e.pos.y), z: Math.round(L.to.z) }, secs: Math.round(t - L.t0), stuck: L.stuck, swim: L.stats.swim || 0, night: L.night, path: L.stats.path, ...(L.blocked ? { blocked: true } : {}), ...(L.visit ? { visit: L.visit } : {}) };
   netSend(trip);
   const l = NAT.trips.get(p.id) || []; l.push({ ...trip, at: Date.now() }); if (l.length > 3) l.shift(); NAT.trips.set(p.id, l);
 }
+function natVisit(p, e, st, t) { // a visit the server asked for: walk to the start of the route, then along it (that trip carries the note id)
+  const V = st.visit;
+  if (V.stage === 0) { V.stage = 1; natLeg(p, e, st, Math.hypot(V.from.x - e.pos.x, V.from.z - e.pos.z) > 3 ? V.from : null, 'visit', 'go', t); if (st.leg) st.leg.quiet = true; }
+  if (st.leg && !st.leg.done) { natWalk(p, e, st, t); return true; }
+  if (V.stage === 1) { V.stage = 2; natLeg(p, e, st, V.to, V.dest || 'visit', 'go', t); if (st.leg) { st.leg.visit = V.note; return true; } }
+  st.visit = null; st.stepKey = null; return false; // back to the day's routine
+}
 function hostNationOp(m, reply) {
   switch (m.op) {
+    case 'visit': { // a citizen goes to see a place again (a note they wrote, now fixed)
+      const e = natEntity(m.cit), pt = (q) => q && Number.isFinite(+q.x) && Number.isFinite(+q.z) ? { x: +q.x, z: +q.z } : null, from = pt(m.from), to = pt(m.to);
+      if (!e || !from || !to) return reply(false, e ? 'visit needs from and to' : 'That citizen is not out and about right now.');
+      const st = NAT.people.get(m.cit) || {}; NAT.people.set(m.cit, st);
+      st.visit = { from, to, note: m.note ?? true, dest: m.dest ? String(m.dest).slice(0, 20) : null, stage: 0 }; st.leg = null; st.stepKey = null; e.sitting = false;
+      return reply(true, 'on the way');
+    }
     case 'found': { // a flat, dry spot near the world spawn for the capital, and homes around it
       const sp = findSpawn(); let best = null;
       for (let i = 0; i < 40; i++) {
@@ -4917,7 +4936,7 @@ function hostNationOp(m, reply) {
 }
 function nationKeepAlive() { const n = net.nation; if (!n?.founded) return []; const P = n.places || {}; return [n.capital, n.hall, ...[...NAT.projects.values()].map((p) => p.site), ...['market', 'park', 'civic', 'works'].flatMap((k) => (Array.isArray(P[k]) ? P[k] : []).slice(0, 4))].filter((p) => p && Number.isFinite(p.x)); }
 function onCabinet(m) {
-  if (m.phase === 'open') { chatLine(`🏛 <b>The cabinet is in session</b> in the Hall of Government (${esc(m.trigger || '')})`, 'ai'); HALLSTATE.meeting = { trigger: m.trigger, speeches: [] }; }
+  if (m.phase === 'open') { chatLine(`🏛 <b>The council is in session</b> in the Hall of Government (${esc(m.trigger || '')})`, 'ai'); HALLSTATE.meeting = { trigger: m.trigger, speeches: [] }; }
   if (m.phase === 'speech' && HALLSTATE.meeting) HALLSTATE.meeting.speeches.push({ name: m.name, role: m.role, text: m.text, props: m.props || [], president: !!m.president });
   if (m.phase === 'decisions' && HALLSTATE.meeting) { Object.assign(HALLSTATE.meeting, { decisions: m.decisions || [], announcement: m.announcement }); const e = entities.find((x) => x.name === m.president && !x.dead); if (e && m.announcement) speak(e, m.announcement, 10, true, true); }
   if (m.phase === 'close') { HALLSTATE.last = HALLSTATE.meeting; if (HALLSTATE.last) HALLSTATE.last.t = Date.now(); HALLSTATE.meeting = null; }
@@ -5066,19 +5085,17 @@ $('#lib').addEventListener('click', (e) => {
 });
 $('#genui').addEventListener('click', (e) => { if (e.target.id === 'genui') uiLocal('close'); });
 // --- the nation panel (J, or /nation)
-const moodFace = (v) => (v > 0.7 ? '😊' : v > 0.5 ? '🙂' : v > 0.35 ? '😕' : v > 0.22 ? '😠' : '🤬');
-let natTab = 'overview';
+let natTab = 'town';
 function openNation() { uiMode = 'nation'; document.exitPointerLock(); $('#nation').style.display = 'flex'; renderNation(); }
 function closeNation() { uiMode = null; $('#nation').style.display = 'none'; lockPointer(); }
 const GRADES = ['A', 'B', 'C', 'D', 'E', 'F'], GRADE_COL = ['#3fbf5f', '#8fd14f', '#d4d43f', '#f0b43c', '#f07c3c', '#e0443c'], GRADE_NAME = { A: 'excellent', B: 'very good', C: 'good', D: 'acceptable', E: 'poor', F: 'reject' };
-const ISSUE_ICON = { route: '🚶', dark: '🌑', eyesore: '🏚', stalled: '⛔', price: '💸', hunger: '🍽', arrears: '🧾', jobless: '🧰', service: '🏥', danger: '🧟', report: '📸', petition: '✉️', protest: '📢' };
+const NOTE_ICON = { note: '📌', report: '📸', petition: '✉️' };
 const natOpenVotes = (n) => (n?.proposals || []).filter((p) => p.status === 'voting').sort((a, b) => (a.closes || 0) - (b.closes || 0));
-const natOpenIssues = (n) => (n?.issues || []).filter((x) => x.status !== 'resolved').sort((a, b) => (b.severity || 0) - (a.severity || 0));
+const natOpenIssues = (n) => (n?.issues || []).filter((x) => x.status !== 'resolved').sort((a, b) => (b.agree || 0) - (a.agree || 0) || (b.last || 0) - (a.last || 0)); // the noticeboard: most-agreed, then newest
 const closesIn = (p) => { const s = Math.max(0, Math.round(((p.closes || 0) - Date.now()) / 1000)); return s >= 90 ? `${Math.round(s / 60)} min` : `${s} s`; };
-const sevIcon = (v) => (v >= 70 ? '🔴' : v >= 40 ? '🟠' : '🟡'), sevCol = (v) => (v >= 70 ? '#e0443c' : v >= 40 ? '#f0b43c' : '#d4d43f');
 function remedyLabel(r) { // a proposal's action in a few words
   switch (r?.type) {
-    case 'path': return `pave a footpath ${r.from?.plot || r.from || ''} → ${r.to?.plot || r.to || ''}`.replace(/\[object Object\]/g, '');
+    case 'path': return 'lay a proper road (paved, with lamps and bridges)';
     case 'lamps': return 'put up street lamps along the way'; case 'streets': return 'pave the streets, with lamps';
     case 'law': return `${r.law} → ${r.value}`; case 'print': return `print ${r.amount}`; case 'bonus': return `bonus of ${r.amount} to every citizen`; case 'backpay': return 'pay the wages owed';
     case 'fund': return `fund project #${r.project} (+${r.amount})`; case 'finish': return `finish project #${r.project}`; case 'demolish': return `clear the unfinished project #${r.project}`;
@@ -5094,70 +5111,67 @@ function natCmd(cmd, args = []) {
 function natIssuesChat() {
   const n = net.nation; if (!n?.founded) return sysMsg('There is no nation yet: /nation found', 'err');
   const iss = natOpenIssues(n).slice(0, 6), v = natOpenVotes(n);
-  chatLine((iss.length ? iss.map((x) => `${sevIcon(x.severity)} <b>#${x.id}</b> ${esc(x.title)}${x.count ? ` (${x.count} people)` : ''}${x.fix ? ` · <i>/fix ${x.id}</i>` : ''}`).join('<br>') : '✅ The city has noticed nothing wrong. /report what you see.')
+  chatLine((iss.length ? iss.map((x) => `${NOTE_ICON[x.kind] || '📌'} <b>#${x.id}</b> ${esc(x.text || x.title || '')} <i>— ${esc(x.by || '?')}${x.agree ? `, +${x.agree} agree` : ''}</i>${x.fix ? ` · <i>/fix ${x.id}</i>` : ''}`).join('<br>') : '📌 The noticeboard is empty. /report what you see.')
     + (v.length ? '<br>' + v.map((p) => `🗳 <b>#${p.id}</b> ${esc(p.title)} · closes in ${closesIn(p)} · <i>/grade ${p.id} A-F</i>`).join('<br>') : ''), 'sys');
 }
 function renderNation() {
   const n = net.nation, el = $('#natbody'); if (!el) return;
   if (!net.online) { el.innerHTML = '<p>The nation lives on the multiplayer server. You are offline.</p>'; return; }
-  if (!n?.founded) { el.innerHTML = `<p><b>${esc(n?.name || 'Edge Goa')}</b> has not been founded yet.</p><p>Founding settles its first citizens around a new capital near spawn: each has a job, needs, a daily routine and an on-chain wallet (mock tokens, in-game only). Nobody governs by default: the city notices what is wrong from its citizens' everyday lives, and players and their AI agents propose fixes and grade them A–F.</p><button data-nat="found">🏛 Found the nation</button>`; return; }
+  if (!n?.founded) { el.innerHTML = `<p><b>${esc(n?.name || 'Edge Goa')}</b> has not been founded yet.</p><p>Founding settles its first citizens around a new capital near spawn. Each is a little AI with a job, a home, a daily routine and opinions of their own (and a wallet of mock, in-game-only tokens). They tell you what's wrong in their own words, with photos; your AI agents and your friends' agents govern the town and fix it.</p><button data-nat="found">🏛 Found the nation</button>`; return; }
   const ch = n.chain || net.chain, bar = (v, c) => `<span class="nbar"><i style="width:${Math.round(clamp(v, 0, 1) * 100)}%;background:${c}"></i></span>`, img = (f) => `${API_BASE}/api/city/${encodeURIComponent(f)}`;
-  const iss = natOpenIssues(n), votes = natOpenVotes(n), cs = n.citizens || [], props = n.proposals || [];
-  if (!['overview', 'issues', 'votes', 'citizens', 'city', 'projects'].includes(natTab)) natTab = 'overview';
-  const tabs = [['overview', 'overview'], ['issues', `issues${iss.length ? ` (${iss.length})` : ''}`], ['votes', `votes${votes.length ? ` (${votes.length})` : ''}`], ['citizens', 'citizens'], ['city', 'city'], ['projects', 'projects']].map(([k, l]) => `<button class="ntab${natTab === k ? ' on' : ''}" data-tab="${k}">${l}</button>`).join('');
+  const iss = natOpenIssues(n), votes = natOpenVotes(n), cs = n.citizens || [], props = n.proposals || [], minds = n.minds || {};
+  if (!['town', 'noticeboard', 'votes', 'people', 'city', 'projects'].includes(natTab)) natTab = 'town';
+  const tabs = [['town', 'town'], ['noticeboard', `noticeboard${iss.length ? ` (${iss.length})` : ''}`], ['votes', `votes${votes.length ? ` (${votes.length})` : ''}`], ['people', 'people'], ['city', 'city'], ['projects', 'projects']].map(([k, l]) => `<button class="ntab${natTab === k ? ' on' : ''}" data-tab="${k}">${l}</button>`).join('');
+  const L = n.laws || {}, cur = esc(n.currency || '');
   let body = '';
-  if (natTab === 'overview') {
-    const avg = (f) => cs.reduce((s, c) => s + f(c), 0) / Math.max(1, cs.length), K = n.kpi || {}, frac = (v) => (v > 1 ? v / 100 : v), mood = frac(K.mood ?? avg((c) => c.mood)), trust = frac(K.trust ?? avg((c) => c.trust));
-    body = `<div class="ngrid"><div><b>Treasury</b><br>${(n.treasury ?? 0).toLocaleString()} ${esc(n.currency || '')}</div><div><b>Food price</b><br>${K.foodPrice ?? n.economy?.foodPrice ?? '?'} (×${K.cpi ?? n.economy?.cpi ?? '?'})${K.mealHours != null ? `<br><small>${K.mealHours} h of pay a meal</small>` : ''}</div><div><b>Mood</b><br>${moodFace(mood)} ${Math.round(mood * 100)}%</div><div><b>Trust in gov't</b><br>${Math.round(trust * 100)}%</div></div>
-      <p>⚠️ <b>${K.issuesOpen ?? iss.length}</b> open issues · ✅ ${K.resolved ?? (n.issues || []).filter((x) => x.status === 'resolved').length} fixed · 🗳 ${votes.length} open votes${K.worked != null ? ` · 👍 ${K.worked} fixes worked` : ''}${K.trips != null ? ` · 🚶 ${K.trips} walks measured` : ''}${K.stalled ? ` · ⛔ ${K.stalled} stalled projects` : ''}${K.unpaid ? ` · 🧾 ${K.unpaid} owed in wages` : ''}${K.striking ? ` · ✋ ${K.striking} on strike` : ''}${K.protesting ? ` · 📢 ${K.protesting} protesting` : ''}</p>
-      <p>${ch?.ready ? `⛓ Money is a mock ERC20 (in-game only) on a ${esc(ch.network)} (chain ${ch.chainId}); every wage, tax and purchase is an on-chain move in the vault ${esc((ch.vault || '').slice(0, 10))}…` : '⛓ chain starting…'}</p>
-      ${n.city?.scores ? `<p>🏙 <b>City</b>: ${Object.entries(n.city.scores).map(([k, v]) => `${esc(k)} <b>${v}</b>/10`).join(' · ')}</p>` : ''}
-      ${n.capital ? `<p>📍 Capital at ${n.capital.x}, ${n.capital.y}, ${n.capital.z} · go there: <code>/tp ${n.capital.x} ${n.capital.y + 2} ${n.capital.z}</code></p>` : ''}
-      <p><b>Laws:</b> ${Object.entries(n.laws || {}).map(([k, v]) => `${esc(k)} ${v}`).join(' · ')}</p>
-      <p><b>Council</b> (elected AI agents): ${n.ministers?.length ? n.ministers.map((m) => `🤖 <b>${esc(m.name)}</b> · ${esc(m.role)}`).join(' · ') : 'no seats taken yet (agents run with the MCP tool <code>government run</code>)'}</p>
+  if (natTab === 'town') {
+    body = `<div class="ngrid"><div><b>Treasury</b><br>${(n.treasury ?? 0).toLocaleString()} ${cur}</div><div><b>A meal costs</b><br>${n.economy?.foodPrice != null ? Math.ceil(n.economy.foodPrice) : '?'} ${cur}</div><div><b>Citizens</b><br>${cs.length}</div><div><b>Their minds</b><br>${minds.online ? '🧠 awake' : '💤 quiet'}</div></div>
+      <p>${minds.online ? `🧠 <b>Citizens are awake</b>: each is a Claude Haiku mind${minds.model ? ` (${esc(minds.model)})` : ''}. They walk their day, look at what's around them, and speak for themselves: a grumble, a note on the noticeboard with a photo, an idea for a fix, a grade on a vote.` : `💤 <b>Citizens are quiet</b>: their minds aren't connected (npc-listen). They still walk their day and build, but say nothing.`}</p>
+      <p>📌 ${iss.length} note${iss.length === 1 ? '' : 's'} on the noticeboard · 🗳 ${votes.length} open vote${votes.length === 1 ? '' : 's'} · ✅ ${(n.issues || []).filter((x) => x.status === 'resolved').length} fixed</p>
+      <p><b>Who governs</b>: your AI agents and your friends' Edge City agents. They read the noticeboard and look at the photos, propose fixes and grade them A–F with you, and ask their humans before big calls.${n.ministers?.length ? `<br>Seats: ${n.ministers.map((m) => `🤖 <b>${esc(m.name)}</b> · ${esc(m.role)}`).join(' · ')}` : '<br><small>No seats taken yet: agents join with the MCP tool <code>government run</code>.</small>'}</p>
       ${n.vision ? `<p>🌅 <b>Vision</b> (${esc(n.vision.by)}): <i>${esc(n.vision.text)}</i></p>` : ''}
+      <p><b>Laws</b>: tax ${L.taxRate ?? 0}% of pay · basic income ${L.ubi ?? 0} every 5 min · teachers, doctors and guards earn ${L.salary ?? 0} an hour · builders get ${L.pieceRate ?? 0} a block · food subsidy ${L.foodSubsidy ?? 0}%</p>
+      <p>${ch?.ready ? `⛓ Money is a mock ERC20 (in-game only) on a ${esc(ch.network)} (chain ${ch.chainId}).` : '⛓ chain starting…'}${n.capital ? ` 📍 Capital: <code>/tp ${n.capital.x} ${n.capital.y + 2} ${n.capital.z}</code>` : ''}</p>
       ${n.protest ? `<p class="nwarn">📢 Protest at the town hall: ${esc((n.protest.grievances || []).join('; '))}</p>` : ''}
       <p><b>News</b></p><div class="nnews">${(n.news || []).slice().reverse().map((x) => `<div>${esc(x.text)}</div>`).join('')}</div>
-      <p><button data-nat="petition">✉️ Petition</button> <button data-nat="report">📸 Report what I see</button> <button data-nat="delegate">🤖 Let my agent vote for me</button> <button data-nat="nodelegate">✋ I vote myself</button> <button data-nat="autonomy">${n.autonomy === false ? '▶ Start the civil service' : '⏸ Pause the civil service'}</button></p>
-      <p><small>The civil service files small fixes for what the city notices; they pass unless most graders object. <code>/telegram</code> links your Telegram for pings.</small></p>`;
-  } else if (natTab === 'issues') {
-    const fixed = (n.issues || []).filter((x) => x.status === 'resolved');
-    const card = (x) => `<div class="ncard">${x.photo ? `<a href="${img(x.photo)}" target="_blank"><img class="nphoto" src="${img(x.photo)}" loading="lazy" alt=""></a>` : ''}<b>${ISSUE_ICON[x.kind] || '⚠️'} #${x.id} ${esc(x.title)}</b><br><small>${esc(x.status || '')}${x.count ? ` · ${x.count} people` : ''}${x.where ? ` · at ${Math.round(x.where.x)}, ${Math.round(x.where.z)}${x.where.plot ? ` (plot ${esc(x.where.plot)})` : ''}` : ''}</small><br>${bar((x.severity || 0) / 100, sevCol(x.severity || 0))} <small>severity ${x.severity ?? '?'}</small>
-      ${(x.quotes || []).slice(0, 3).map((q) => `<p>🗣 <b>${esc(q.who)}</b>: “${esc(q.text)}”</p>`).join('')}
-      ${x.metrics && Object.keys(x.metrics).length ? `<p><small>${Object.entries(x.metrics).map(([k, v]) => `${esc(k)} <b>${esc(typeof v === 'number' ? Math.round(v * 100) / 100 : typeof v === 'object' ? JSON.stringify(v) : v)}</b>`).join(' · ')}</small></p>` : ''}
-      ${x.proposals?.length ? `<p><small>🗳 ${x.proposals.map((id) => { const p = props.find((q) => q.id === id); return `#${id}${p ? ` ${esc(p.status)}` : ''}`; }).join(' · ')}</small></p>` : ''}
-      ${x.resolved ? `<p>✅ ${esc(x.resolved.note || 'fixed')}</p>` : x.fix && !props.some((p) => p.issue === x.id && p.status === 'voting') ? `<button data-fix="${x.id}">🛠 Propose: ${esc(remedyLabel(x.fix))}</button>` : ''}<div style="clear:both"></div></div>`;
-    body = `<p><small>What the city noticed from its citizens' walks, wallets and work, and from your reports. Each fix becomes a proposal everyone grades.</small></p>` + (iss.length ? iss.map(card).join('') : '<p>Nothing wrong that the city has noticed. Walk around and <b>/report</b> what you see.</p>') + (fixed.length ? `<p><b>Recently fixed</b></p>${fixed.slice(-5).reverse().map(card).join('')}` : '');
+      <p><button data-nat="report">📸 Pin what I see</button> <button data-nat="petition">✉️ Ask for something</button> <button data-nat="delegate">🤖 Let my agent vote for me</button> <button data-nat="nodelegate">✋ I vote myself</button></p>
+      <p><small><code>/telegram</code> links your Telegram, so a big call reaches you.</small></p>`;
+  } else if (natTab === 'noticeboard') {
+    const fixed = (n.issues || []).filter((x) => x.status === 'resolved'), STATUS = { open: 'open', fixing: '🛠 a fix is being decided or built', checking: '👀 fixed, waiting for the people who wrote it to see it', resolved: '✅ sorted' };
+    const card = (x) => { const r = ((x.id * 37) % 7) - 3, ppl = (x.people || []).filter((p) => p !== x.by);
+      return `<div class="ncard">${x.photo ? `<a class="npol" style="--r:${r}deg" href="${img(x.photo)}" target="_blank"><img src="${img(x.photo)}" loading="lazy" alt=""><small>${esc(String(x.by || '').split(' ')[0])}'s photo</small></a>` : ''}<b>${NOTE_ICON[x.kind] || '📌'} #${x.id}</b> “${esc(x.text || x.title || '')}”<br><small>— ${esc(x.by || '?')}${x.byKind && x.byKind !== 'citizen' ? ` (${esc(x.byKind)})` : ''} · ${esc(ago(x.first))}</small>
+      ${(x.quotes || []).filter((q) => q.who !== x.by || q.text !== x.text).slice(0, 3).map((q) => `<p class="nquote">🗣 “${esc(q.text)}” <small>— ${esc(q.who)}</small></p>`).join('')}
+      ${ppl.length ? `<p class="npeople"><small>👍 ${ppl.slice(0, 6).map(esc).join(', ')}${ppl.length > 6 ? ` +${ppl.length - 6}` : ''} ${ppl.length === 1 ? 'agrees' : 'agree'}</small></p>` : ''}
+      <p><small>${x.status === 'resolved' ? '' : STATUS[x.status] || esc(x.status || '')}${x.proposals?.length ? ` · 🗳 ${x.proposals.map((id) => { const p = props.find((q) => q.id === id); return `#${id}${p ? ` ${esc(p.status)}` : ''}`; }).join(' · ')}` : ''}</small></p>
+      ${x.resolved ? `<p>✅ ${esc(x.resolved.note || 'sorted')}</p>` : x.fix && !props.some((p) => p.issue === x.id && p.status === 'voting') ? `<button data-fix="${x.id}">🛠 Propose: ${esc(x.fixText || remedyLabel(x.fix))}</button>` : ''}<div style="clear:both"></div></div>`; };
+    body = `<p><small>Notes the citizens pinned up as they went about their day (with what they saw), and your reports. Your agents read these and propose fixes; everyone grades them.</small></p>` + (iss.length ? iss.map(card).join('') : `<p>The noticeboard is empty. ${minds.online ? 'Citizens pin notes when something bothers them.' : 'Citizens pin notes once their minds are connected.'} Walk around and <b>/report</b> what you see.</p>`) + (fixed.length ? `<p><b>Recently sorted</b></p>${fixed.slice(-5).reverse().map(card).join('')}` : '');
   } else if (natTab === 'votes') {
     const my = (p) => p.ballots?.[playerName], tally = (T) => GRADES.map((k, i) => `<span style="color:${GRADE_COL[i]}">${k}&nbsp;${T?.[k] || 0}</span>`).join(' ');
-    const vcard = (p, open) => `<div class="ncard"><b>🗳 #${p.id} ${esc(p.title || '')}</b> <small>${esc(p.byKind === 'civil' ? 'civil service' : p.by || '')}${p.byKind === 'minister' ? ' (minister)' : ''}${p.issue ? ` · for issue #${p.issue}` : ''}</small>
-      <p>${(p.actions || []).map((a) => `🛠 ${esc(remedyLabel(a))}`).join('<br>')}${p.cost ? `<br>💰 about ${p.cost} ${esc(n.currency || '')}` : ''}${p.predicted ? `<br>📈 ${esc(p.predicted)}` : ''}</p>
+    const vcard = (p, open) => `<div class="ncard"><b>🗳 #${p.id} ${esc(p.title || '')}</b> <small>${esc(p.by || '')}${p.byKind === 'minister' ? ' (minister)' : p.byKind === 'citizen' ? ' (citizen)' : p.byKind === 'agent' ? ' (agent)' : ''}${p.issue ? ` · for note #${p.issue}` : ''}</small>
+      <p>${(p.actions || []).map((a) => `🛠 ${esc(remedyLabel(a))}`).join('<br>')}${p.cost ? `<br>💰 about ${p.cost} ${cur}` : ''}${p.predicted ? `<br>📐 ${esc(p.predicted)}` : ''}</p>
       ${p.needsHuman ? `<p class="nwarn">🙋 needs a human: ${esc(p.needsHuman)}</p>` : ''}
-      <p><small>${p.rule === 'consent' ? 'Consent: passes unless most graders give E or F' : 'Majority judgment: passes with a median grade of C or better'}${open ? ` · closes in ${closesIn(p)}` : ` · <b>${esc(p.status)}</b>`}</small><br>Residents: <b>${p.grade || '–'}</b> (${tally(p.tally)})<br>Citizens: <b>${p.citizens?.grade || '–'}</b>${p.citizens?.tally ? ` (${tally(p.citizens.tally)})` : ''}${p.citizens?.why?.length ? `<br><small>${p.citizens.why.slice(0, 3).map(esc).join(' · ')}</small>` : ''}</p>
+      <p><small>${p.rule === 'consent' ? 'Small fix: passes unless most graders give E or F' : 'Passes with a median grade of C or better'}${open ? ` · closes in ${closesIn(p)}` : ` · <b>${esc(p.status)}</b>`}</small><br>Residents & agents: <b>${p.grade || '–'}</b> (${tally(p.tally)})<br>Citizens: <b>${p.citizens?.grade || '–'}</b>${p.citizens?.n ? ` from ${p.citizens.n}` : ''}</p>
+      ${(p.citizens?.why || []).slice(0, 4).map((w) => `<p class="nquote"><small>🗣 ${esc(w)}</small></p>`).join('')}
       ${(p.comments || []).slice(-4).map((c) => `<p><small>💬 <b>${esc(c.by || '')}</b>${c.grade ? ` <span style="color:${GRADE_COL[GRADES.indexOf(c.grade)] || '#ccc'}">${esc(c.grade)}</span>` : ''}: ${esc(c.text || '')}</small></p>`).join('')}
       ${p.result?.why ? `<p><small>⚖️ ${esc(p.result.why)}</small></p>` : ''}
       ${open ? `<p>Your grade: ${GRADES.map((k, i) => `<button class="ngrade${my(p) === k ? ' on' : ''}" style="--g:${GRADE_COL[i]}" data-grade="${p.id}:${k}" title="${GRADE_NAME[k]}">${k}</button>`).join(' ')}</p>` : ''}
-      ${p.outcome ? `<p>${p.outcome.worked ? '✅' : '❌'} ${esc(p.outcome.text || '')}</p>` : ''}</div>`;
+      ${p.outcome ? `<p>${p.outcome.worked === true ? '✅' : p.outcome.worked === 'partly' ? '🌗' : p.outcome.worked === false ? '❌' : '•'} ${esc(p.outcome.text || '')}</p>` : ''}</div>`;
     const past = props.filter((p) => p.status !== 'voting').slice(-8).reverse();
-    body = `<p><small>Grade each proposal from A (excellent) to F (reject). Its grade is the median: at least half the graders gave it that or better (majority judgment). The citizens grade it too, from how it would change their own days.</small></p>` + (votes.length ? votes.map((p) => vcard(p, true)).join('') : '<p>No open votes. Open issues have a 🛠 button that proposes their fix.</p>') + (past.length ? `<p><b>Decided</b></p>${past.map((p) => vcard(p, false)).join('')}` : '');
-  } else if (natTab === 'citizens') {
+    body = `<p><small>Grade each proposal from A (excellent) to F (reject). Its grade is the median: at least half the graders gave it that or better. Citizens grade too, in their own words.</small></p>` + (votes.length ? votes.map((p) => vcard(p, true)).join('') : '<p>No open votes. Notes on the noticeboard with a 🛠 button can be proposed in one click.</p>') + (past.length ? `<p><b>Decided</b></p>${past.map((p) => vcard(p, false)).join('')}` : '');
+  } else if (natTab === 'people') {
     const day = (c) => routineOf(c).map((x) => `${x.at}h ${x.go}${x.do ? ` (${x.do})` : ''}`).join(' · ');
-    const walk = (c) => { const x = c.lastTrip || NAT.trips.get(c.id)?.at(-1); return x ? `→ ${x.dest}: ${Math.round(x.len)} m${x.straight ? ` (×${(x.len / Math.max(1, x.straight)).toFixed(1)} the straight line)` : ''}${x.blocked ? ', no way through' : ''}${x.swim ? `, swam ${x.swim} m` : ''}${x.night && x.dark ? `, ${x.dark} m in the dark` : ''}${x.eyesores?.length ? ', past a building site' : ''}${x.stuck ? ', got stuck' : ''}` : ''; };
     const occs = [...new Set(cs.map((c) => c.occupation))], B = n.behaviors || {};
-    body = `<table class="ntable"><tr><th></th><th>Citizen</th><th>Job</th><th>Mood</th><th>Trust</th><th>Coins</th><th>Status</th></tr>${cs.map((c) => `<tr title="${esc(c.personality || '')} · wants: ${esc((c.wants || []).join(', '))} · day: ${esc(day(c))}"><td>${moodFace(c.mood)}</td><td>${esc(c.name)} <small>${c.age}</small></td><td>${esc(c.occupation)}</td><td>${bar(c.mood, '#7c5')}</td><td>${bar(c.trust, '#59c')}</td><td>${c.coins}</td><td>${esc(c.status)}${c.grievances?.length ? `<br><small>${esc(c.grievances[0])}</small>` : ''}${walk(c) ? `<br><small>🚶 ${esc(walk(c))}</small>` : ''}</td></tr>`).join('')}</table>
-      <p><b>Daily routines</b> <small>(data the government can rewrite with a <code>behavior</code> proposal; every walk is measured)</small></p>${occs.map((o) => { const b = B[o] || B.default; return `<p><small><b>${esc(o)}</b>${b?.by ? ` <i>(v${b.version || 1} by ${esc(b.by)})</i>` : ''}: ${esc(day({ occupation: o }))}</small></p>`; }).join('')}<p><small>Talk to anyone with @Name in chat.</small></p>`;
+    body = `<table class="ntable"><tr><th></th><th>Citizen</th><th>Job</th><th>Feeling</th><th>Coins</th><th>Lately</th></tr>${cs.map((c) => `<tr title="${esc(c.personality || '')} · wants: ${esc((c.wants || []).join(', '))} · day: ${esc(day(c))}"><td>${moodEmoji(c.mood) || '🙂'}${c.thinking ? '💭' : ''}</td><td>${esc(c.name)} <small>${c.age}</small></td><td>${esc(c.occupation)}</td><td>${esc(c.mood || '–')}</td><td>${c.coins}</td><td>${c.status !== 'idle' ? `<small>${esc(c.status)}</small><br>` : ''}${c.said ? `“${esc(c.said)}”` : '<small>–</small>'}</td></tr>`).join('')}</table>
+      <p><b>Daily routines</b> <small>(residents can rewrite one with a <code>behavior</code> proposal)</small></p>${occs.map((o) => { const b = B[o] || B.default; return `<p><small><b>${esc(o)}</b>${b?.by ? ` <i>(v${b.version || 1} by ${esc(b.by)})</i>` : ''}: ${esc(day({ occupation: o }))}</small></p>`; }).join('')}`;
   } else if (natTab === 'projects') {
     body = (n.projects || []).length ? n.projects.slice().reverse().map((p) => `<p><b>#${p.id} ${esc(p.name)}</b> <small>${p.plot ? `plot ${esc(p.plot)} (${esc(p.zone || '')}) · ` : ''}${esc(p.purpose || '')}${p.site ? ` · at ${p.site.x}, ${p.site.z} (/tp ${p.site.x} ${p.site.y + 4} ${p.site.z + 12})` : ''}</small><br>${esc(p.status)}${p.total ? ` · ${p.done}/${p.total} blocks ${bar(p.done / p.total, '#fc4')}` : ''} · spent ${p.spent}/${p.budget} · ${(p.workers || []).length} workers${p.note ? `<br><small>${esc(p.note)}</small>` : ''}</p>`).join('') : '<p>No public works yet.</p>';
   } else if (natTab === 'city') {
-    const C = n.city, R = C?.reports?.[C.reports.length - 1];
-    body = !C ? '<p>No city plan yet.</p>' : `<p>🗺 <b>Master plan</b>: ${esc(C.plan || 'a street grid around the Hall')}${C.style ? `<br><small>🎨 One style for every public building: ${esc(C.style)}</small>` : ''}</p>${C.scores ? `<p>🏙 ${Object.entries(C.scores).map(([k, v]) => `${esc(k)} <b>${v}</b>/10`).join(' · ')} <small>(measured from the citizens' walks and the plan)</small></p>` : ''}
+    const C = n.city;
+    body = !C ? '<p>No city plan yet.</p>' : `<p>🗺 <b>Master plan</b>: ${esc(C.plan || 'a street grid around the Hall')}${C.style ? `<br><small>🎨 One style for every public building: ${esc(C.style)}</small>` : ''}</p>
       <div class="citywrap"><canvas id="citymap" width="406" height="406"></canvas><div class="citylegend">${Object.entries(ZONE_COL).map(([z, c]) => `<span><i style="background:${c}"></i>${z}</span>`).join('')}<span><i style="background:#a3a3a3"></i>paved street</span><span><i style="background:#d2b45a"></i>being paved</span><span><i style="background:#6b4f33"></i>dirt street</span>
         <p><small>Each building gets its own plot in a zone, levelled and facing the street toward the Hall (#). Bright plots are built or going up; the white dot is you.</small></p>${C.districts?.length ? `<p>${C.districts.map((d) => `<b>${esc(d.name)}</b>: ${esc(d.plots.join(' '))}`).join('<br>')}</p>` : ''}</div></div>
-      ${R ? `<p><b>🏙 City inspection #${R.id}</b> <small>(${esc(R.trigger || '')}, ${Math.round((Date.now() - R.t) / 60e3)} min ago)</small>${R.scores ? `<br>${Object.entries(R.scores).map(([k, v]) => `${esc(k)} <b>${v}</b>/10`).join(' · ')}` : ''}</p>${R.summary ? `<p>${esc(R.summary)}</p>` : ''}
-        <div class="cityphotos">${(R.photos || []).map((p) => `<figure><a href="${img(p.file)}" target="_blank"><img src="${img(p.file)}" loading="lazy" alt=""></a><figcaption>${esc(p.label)}</figcaption></figure>`).join('')}</div>
-        ${(R.voices || []).map((v) => `<p>🗣 <b>${esc(v.name)}</b>: “${esc(v.says)}”</p>`).join('')}` : ''}
-      ${C.feedback?.length ? `<p><b>📸 Photo reports</b></p>${C.feedback.slice().reverse().map((f) => `<p>${f.photo ? `<a href="${img(f.photo)}" target="_blank">📷</a> ` : ''}<b>${esc(f.by)}</b>: ${esc(f.text)}${f.seen ? `<br><small>${esc(f.seen)}</small>` : ''}</p>`).join('')}` : ''}
-      <p><button data-nat="report">📸 Report what I see</button> <button data-nat="inspect">🔍 Audit the city now</button></p>`;
+      ${C.feedback?.length ? `<p><b>📸 Photo reports</b></p>${C.feedback.slice().reverse().map((f) => `<p>${f.photo ? `<a href="${img(f.photo)}" target="_blank">📷</a> ` : ''}<b>${esc(f.by)}</b>: ${esc(f.text)}</p>`).join('')}` : ''}
+      <p><button data-nat="report">📸 Pin what I see</button> <button data-nat="inspect">📷 Photograph the town</button></p>`;
   }
   el.innerHTML = `<h2>🏛 ${esc(n.name)}</h2><div class="ntabs">${tabs}</div>${body}`;
   if (natTab === 'city') drawCityMap($('#citymap'), n);
@@ -5190,7 +5204,7 @@ function drawCityMap(cv, n) {
 function snapView(w = 640) { // a JPEG of what you see right now (the 3D view, without the HUD)
   try { renderer.render(scene, camera); const src = renderer.domElement, cv = document.createElement('canvas'); cv.width = w; cv.height = Math.round((w * src.height) / src.width); cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height); return cv.toDataURL('image/jpeg', 0.72); } catch { return null; }
 }
-function sendReport(text) { // /report: a photo of your view, with what you say, for the cabinet
+function sendReport(text) { // /report: a photo of your view, with what you say, pinned to the town noticeboard
   if (!net.online) return sysMsg('The nation lives on the multiplayer server.', 'err');
   const img = snapView(), fl = document.createElement('div');
   fl.style.cssText = 'position:fixed;inset:0;background:#fff;opacity:.75;pointer-events:none;transition:opacity .45s;z-index:99'; document.body.appendChild(fl);
@@ -5204,14 +5218,14 @@ $('#nation').addEventListener('click', (e) => {
 });
 function natAction(k) {
   if (k === 'found') natCmd('found');
-  else if (k === 'petition') { const t = prompt('What do you want the government to do?'); if (t) natCmd('petition', t.split(/\s+/)); }
-  else if (k === 'report') { const t = prompt('What do you see here, and what should the government change (or keep)? A photo of your view goes with it.'); if (t) sendReport(t); }
+  else if (k === 'petition') { const t = prompt('What do you want done in the town?'); if (t) natCmd('petition', t.split(/\s+/)); }
+  else if (k === 'report') { const t = prompt('What do you see here? It goes on the town noticeboard with a photo of your view.'); if (t) sendReport(t); }
   else if (k === 'delegate' || k === 'nodelegate') natCmd('delegate', [k === 'delegate' ? 'on' : 'off']);
   else if (k === 'inspect') natCmd('inspect');
   else if (k === 'autonomy') natCmd('autonomy', [net.nation?.autonomy === false ? 'on' : 'off']);
 }
 // ---- the Hall of Government: a glass-walled chamber at the capital. Elected agents' avatars sit at the council table when
-// they meet, citizens watch from the gallery; the screen inside shows the open vote and what the city noticed, a board
+// they meet, citizens watch from the gallery; the screen inside shows the open vote and the noticeboard, a board
 // outside shows the laws, and a hologram of the latest planned building turns over the table.
 const HALL = { // block offsets from the hall's origin (floor level), [x, z, yaw]
   doorIn: [0, 5], doorOut: [0, 9],
@@ -5302,29 +5316,26 @@ function drawHallScreen() {
   const { g, cv } = S, n = net.nation, W = cv.width, H = cv.height, F = "'Pixelify Sans', monospace";
   g.fillStyle = '#0d1424'; g.fillRect(0, 0, W, H); g.strokeStyle = '#3b5a9a'; g.lineWidth = 8; g.strokeRect(4, 4, W - 8, H - 8);
   let y = 62, maxW = W - 70; const line = (text, size = 30, color = '#e8eefc', maxLines = 2) => { g.font = `${size}px ${F}`; g.fillStyle = color; for (const l of wrapLines(g, text, maxW, maxLines)) { g.fillText(l, 34, y); y += size * 1.22; } };
-  const M = HALLSTATE.meeting, V = natOpenVotes(n)[0], I = natOpenIssues(n);
-  if (M) { // elected agents meeting in the chamber
-    line(`🏛 COUNCIL IN SESSION · ${M.trigger || ''}`, 40, '#ffd84d', 1);
-    if (M.decisions) { line(`✅ ${M.decisions.length ? M.decisions.join(' · ') : 'no changes'}`, 36, '#7dff9a', 3); if (M.announcement) line(`“${M.announcement}”`, 30, '#c9d6ff', 3); }
-    for (const sp of M.speeches.slice(M.decisions ? -1 : -3)) { if (y > H - 50) break; line(`${sp.name.split(' ')[0]} (${sp.role}): ${sp.text}`, 33, '#dfe6f7', 3); if (sp.props?.length) line(`   → ${sp.props.join(' · ')}`, 30, '#7fd4ff', 1); }
-  } else if (V) { // the open vote: what it does, the live A–F tally, the residents' and the citizens' grades
+  const V = natOpenVotes(n)[0], I = natOpenIssues(n);
+  if (V) { // the open vote: what it does, the live A–F tally, the residents' and the citizens' grades
     line(`🗳 VOTE #${V.id}: ${V.title || ''}`, 40, '#ffd84d', 2);
-    line(`${V.byKind === 'civil' ? 'Civil service' : V.by || ''}${V.cost ? ` · costs ${V.cost}` : ''}${V.predicted ? ` · ${V.predicted}` : ''}`, 26, '#9fb0d6', 2);
+    line(`${V.by || ''}${V.cost ? ` · costs ${V.cost}` : ''}${V.predicted ? ` · ${V.predicted}` : ''}`, 26, '#9fb0d6', 2);
     const T = V.tally || {}, tot = Math.max(1, ...GRADES.map((k) => T[k] || 0)), bw = (W - 68) / 6;
     GRADES.forEach((k, i) => { const x = 34 + i * bw, hh = (64 * (T[k] || 0)) / tot; g.fillStyle = '#1c2742'; g.fillRect(x, y - 10, bw - 14, 64); g.fillStyle = GRADE_COL[i]; g.fillRect(x, y + 54 - hh, bw - 14, hh); g.font = `28px ${F}`; g.fillStyle = '#ffffff'; g.fillText(`${k}  ${T[k] || 0}`, x + 10, y + 32); });
     y += 92;
     line(`Residents: ${V.grade || '–'} · Citizens: ${V.citizens?.grade || '–'} · ${V.rule === 'consent' ? 'passes unless most object' : 'needs C or better'} · closes in ${closesIn(V)}`, 28, '#7fd4ff', 2);
+    const w = V.citizens?.why?.[0]; if (w && y < H - 60) line(`🗣 ${w}`, 24, '#c9d6ff', 1);
     if (V.needsHuman) line(`🙋 needs a human: ${V.needsHuman}`, 24, '#ffb0b0', 1);
     line(`Grade it: /grade ${V.id} A-F, or the 🏛 panel (J)`, 24, '#9fb0d6', 1);
-  } else if (I.length) { // what the city noticed, with the worst one's photo
+  } else if (I.length) { // the noticeboard, with the top note's photo
     const im = I[0].photo ? hallPhoto(I[0].photo) : null, pw = 448, ph = 252;
-    if (im) { g.drawImage(im, W - pw - 30, 70, pw, ph); maxW = W - pw - 100; }
-    line('⚠️ WHAT THE CITY NOTICED', 40, '#ffd84d', 1);
-    for (const x of I.slice(0, 3)) { if (y > H - 60) break; line(`${sevIcon(x.severity)} ${x.title}${x.count ? ` (${x.count} people)` : ''}`, 30, '#e8eefc', 2); const q = x.quotes?.[0]; if (q && y < H - 60) line(`“${q.text}” — ${q.who}`, 24, '#c9d6ff', 2); }
+    if (im) { g.fillStyle = '#fbf8ef'; g.fillRect(W - pw - 40, 60, pw + 20, ph + 20); g.drawImage(im, W - pw - 30, 70, pw, ph); maxW = W - pw - 100; }
+    line('📌 ON THE NOTICEBOARD', 40, '#ffd84d', 1);
+    for (const x of I.slice(0, 3)) { if (y > H - 60) break; line(`“${x.text || x.title || ''}”`, 30, '#e8eefc', 2); if (y < H - 60) line(`— ${x.by || '?'}${x.agree ? ` · ${x.agree} agree` : ''}`, 24, '#c9d6ff', 1); }
   } else if (n?.founded) {
     line(`🏛 HALL OF GOVERNMENT · ${n.name}`, 44, '#ffd84d', 1);
     if (n.vision) line(`🌅 Vision (${n.vision.by}): ${n.vision.text}`, 30, '#e8eefc', 3);
-    line('The city reports what is wrong from its citizens\' everyday lives. Residents and their AI agents propose fixes and grade them A–F: /issues · /grade', 28, '#9fb0d6', 3);
+    line('Citizens pin what bothers them to the noticeboard. Your AI agents and your friends\' agents propose fixes, and everyone grades them A–F: /notes · /grade', 28, '#9fb0d6', 3);
   }
   S.tex.needsUpdate = true;
 }
@@ -5336,12 +5347,12 @@ function hallPhoto(file) { // a city photo for the screen (CORS-clean, or it nev
 }
 function drawHallBoard() {
   const B = hallViz.board, n = net.nation; if (!B || !n?.founded) return;
-  const { g, cv } = B, W = cv.width, F = "'Pixelify Sans', monospace", cs = n.citizens || [], avg = (f) => Math.round((cs.reduce((s, c) => s + f(c), 0) / Math.max(1, cs.length)) * 100);
+  const { g, cv } = B, W = cv.width, F = "'Pixelify Sans', monospace";
   g.fillStyle = '#2b1d0e'; g.fillRect(0, 0, W, cv.height); g.strokeStyle = '#8a5a2b'; g.lineWidth = 10; g.strokeRect(5, 5, W - 10, cv.height - 10);
   let y = 58; const line = (text, size, color, maxLines = 1) => { g.font = `${size}px ${F}`; g.fillStyle = color; for (const l of wrapLines(g, text, W - 70, maxLines)) { g.fillText(l, 34, y); y += size * 1.25; } };
   line(`📜 ${n.name} · treasury ${n.treasury.toLocaleString()} ${n.currency} (on-chain)`, 40, '#ffe7b0');
   const L = n.laws || {}; line(`Laws: tax ${L.taxRate}% · UBI ${L.ubi} · salary ${L.salary} · per block ${L.pieceRate} · food subsidy ${L.foodSubsidy}%`, 30, '#ffffff', 2);
-  line(`Mood ${avg((c) => c.mood)}% · trust ${avg((c) => c.trust)}% · food ${n.economy?.foodPrice ?? '?'} · ⚠️ ${natOpenIssues(n).length} issues · 🗳 ${natOpenVotes(n).length} votes${n.protest ? ' · 📢 PROTEST' : ''}`, 30, n.protest ? '#ff9a9a' : '#d8f5c8');
+  line(`A meal ${n.economy?.foodPrice != null ? Math.ceil(n.economy.foodPrice) : '?'} · 📌 ${natOpenIssues(n).length} notes · 🗳 ${natOpenVotes(n).length} votes${n.minds?.online ? ' · 🧠 citizens awake' : ''}${n.protest ? ' · 📢 PROTEST' : ''}`, 30, n.protest ? '#ff9a9a' : '#d8f5c8');
   const last = n.news[n.news.length - 1]; if (last) line(`📰 ${last.text}`, 26, '#e0d0b0', 2);
   B.tex.needsUpdate = true;
 }

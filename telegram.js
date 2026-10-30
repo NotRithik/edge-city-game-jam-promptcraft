@@ -57,7 +57,7 @@ export function startTelegram({ token, world, onGrade, saveWorldSoon, log = cons
         const sent = (T.pings[pid] || []).filter((t) => t > day); if (sent.length >= PINGS_PER_DAY) continue;
         T.pings[pid] = [...sent, Date.now()]; n++;
         const deflt = proposal?.status === 'voting' ? `\nIf you don't answer: ${proposal.rule === 'consent' ? 'it passes unless a majority objects' : 'it is decided by whoever votes'}, at ${new Date(proposal.closes).toISOString().slice(11, 16)} UTC.` : '';
-        send(l.chat, `🏛 Edge Goa needs you\n${text}${proposal?.predicted ? `\nWhat it does: ${proposal.predicted}` : ''}${proposal?.citizens ? `\nCitizens' grade: ${proposal.citizens.grade}${proposal.citizens.why?.length ? ` (${proposal.citizens.why.slice(0, 2).join('; ')})` : ''}` : ''}${deflt}${proposal?.status === 'voting' ? '\nYour grade:' : ''}`, proposal?.status === 'voting' ? gradeButtons(proposal.id) : null);
+        send(l.chat, `🏛 Edge Goa needs you\n${text}${proposal?.predicted ? `\nWhat it does: ${proposal.predicted}` : ''}${proposal?.citizens?.grade ? `\nCitizens' grade: ${proposal.citizens.grade}${proposal.citizens.why?.length ? ` (${proposal.citizens.why.slice(0, 2).join('; ')})` : ''}` : ''}${deflt}${proposal?.status === 'voting' ? '\nYour grade:' : ''}`, proposal?.status === 'voting' ? gradeButtons(proposal.id) : null);
       }
       if (n) saveWorldSoon();
       return n;

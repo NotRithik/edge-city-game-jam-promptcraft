@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": ["promptcraft"],
+  "permissions": {
+    "allow": ["mcp__promptcraft__citizens", "Bash(cat ~/.config/promptcraft/npc_key)"]
+  }
+}
